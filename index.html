@@ -427,6 +427,16 @@ const SURAHS = [
 
 const GRADES = ["ممتاز","جيد جدًا","جيد","مقبول"];
 
+/* بيانات ربط Firebase الخاصة بمركز الإسراء القرآني — مضمّنة مسبقًا، لا حاجة لإدخالها يدويًا */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBn1HSHAUesRiCt5Vk-2K7IsjxJk_6qAsE",
+  authDomain: "al-isra-quranic-center.firebaseapp.com",
+  projectId: "al-isra-quranic-center",
+  storageBucket: "al-isra-quranic-center.firebasestorage.app",
+  messagingSenderId: "898492696533",
+  appId: "1:898492696533:web:8b995025c02a3e3aeb9f5c"
+};
+
 const BRAND_ICON = `<svg width="20" height="20" viewBox="0 0 48 48" fill="none">
   <path d="M24 10c-5 1.5-10 4-13 6.5V38c3-2.5 8-4.5 13-5.5M24 10c5 1.5 10 4 13 6.5V38c-3-2.5-8-4.5-13-5.5M24 10v22.5"
         stroke="#e4b74a" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
@@ -457,27 +467,26 @@ function saveConfig(){
   try{
     const cfg = Function('"use strict";return (' + objStr + ')')();
     if(!cfg.apiKey || !cfg.projectId) throw new Error('بيانات ناقصة');
-    localStorage.setItem('isra_fb_config', JSON.stringify(cfg));
-    location.reload();
+    firebase.initializeApp(cfg);
+    db = firebase.firestore();
+    document.getElementById('setupScreen').classList.add('hidden');
+    const savedSession = sessionStorage.getItem('isra_session');
+    subscribeAll(()=>{
+      if(savedSession){ session = JSON.parse(savedSession); showApp(); }
+      else document.getElementById('loginScreen').classList.remove('hidden');
+    });
   }catch(e){
     errEl.textContent = 'تعذّر قراءة الكود (' + e.message + '). تأكد إنك لصقت كود الإعدادات كامل وصحيح من Firebase، بما فيه apiKey و projectId.';
   }
 }
 
 function boot(){
-  const saved = localStorage.getItem('isra_fb_config');
-  if(!saved){
-    document.getElementById('setupScreen').classList.remove('hidden');
-    return;
-  }
   try{
-    const cfg = JSON.parse(saved);
-    firebase.initializeApp(cfg);
+    firebase.initializeApp(FIREBASE_CONFIG);
     db = firebase.firestore();
   }catch(e){
-    localStorage.removeItem('isra_fb_config');
     document.getElementById('setupScreen').classList.remove('hidden');
-    document.getElementById('setupError').textContent = 'حدث خطأ بالاتصال، أعد لصق البيانات.';
+    document.getElementById('setupError').textContent = 'تعذّر الاتصال بقاعدة البيانات: ' + e.message;
     return;
   }
   const savedSession = sessionStorage.getItem('isra_session');
