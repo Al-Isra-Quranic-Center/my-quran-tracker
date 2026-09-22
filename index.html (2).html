@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>مركز الإسراء القرآني</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
+
+<!-- ============================================================
+     Firebase SDK (compat build) — خدمة قاعدة بيانات مجانية من Google
+     ============================================================ -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+
+<style>
+/* =========================================================
+   Design tokens
+   ========================================================= */
+:root{
+  --emerald-950:#0a2c22;
+  --emerald-800:#12513e;
+  --emerald-700:#166248;
+  --emerald-600:#1c7a5a;
+  --emerald-100:#e4efe8;
+  --gold-500:#b8912f;
+  --gold-100:#f3e9cf;
+  --sand-50:#faf7ef;
+  --sand-100:#f2ede0;
+  --ink-900:#1b201d;
+  --ink-600:#54605a;
+  --ink-400:#8b968f;
+  --line:#e2dccb;
+  --white:#ffffff;
+  --red-600:#b3413a;
+  --radius:10px;
+  --shadow: 0 1px 2px rgba(20,25,20,.06), 0 6px 20px rgba(20,25,20,.06);
+}
+*{box-sizing:border-box;}
+html,body{height:100%;}
+body{
+  margin:0;
+  background:var(--sand-50);
+  color:var(--ink-900);
+  font-family:'Tajawal',sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,.serif{font-family:'Amiri',serif;}
+button{font-family:inherit;}
+::selection{background:var(--gold-100);}
+
+a{color:inherit;}
+.hidden{display:none !important;}
+
+/* ---------- Generic form controls ---------- */
+input,select,textarea{
+  font-family:inherit;
+  font-size:15px;
+  padding:10px 12px;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:var(--white);
+  color:var(--ink-900);
+  width:100%;
+}
+input:focus,select:focus,textarea:focus{
+  outline:2px solid var(--emerald-600);
+  outline-offset:1px;
+}
+label{
+  display:block;
+  font-size:13px;
+  color:var(--ink-600);
+  margin-bottom:6px;
+  font-weight:500;
+}
+.field{margin-bottom:14px;}
+
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  border:none;border-radius:8px;
+  padding:10px 18px;
+  font-size:14px;font-weight:700;
+  cursor:pointer;
+  transition:transform .08s ease, background .15s ease;
+}
+.btn:active{transform:scale(.97);}
+.btn-primary{background:var(--emerald-700);color:var(--white);}
+.btn-primary:hover{background:var(--emerald-800);}
+.btn-gold{background:var(--gold-500);color:var(--white);}
+.btn-gold:hover{background:#a17f28;}
+.btn-ghost{background:transparent;color:var(--emerald-700);border:1px solid var(--emerald-700);}
+.btn-ghost:hover{background:var(--emerald-100);}
+.btn-danger{background:transparent;color:var(--red-600);border:1px solid var(--red-600);}
+.btn-danger:hover{background:#f7e9e8;}
+.btn-sm{padding:6px 12px;font-size:13px;}
+.btn:disabled{opacity:.5;cursor:not-allowed;}
+
+.card{
+  background:var(--white);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+}
+
+/* =========================================================
+   Setup screen (first run — no Firebase config)
+   ========================================================= */
+#setupScreen{
+  max-width:640px;margin:60px auto;padding:0 20px;
+}
+#setupScreen textarea{height:120px;font-family:monospace;font-size:13px;direction:ltr;text-align:left;}
+
+/* =========================================================
+   Login
+   ========================================================= */
+#loginScreen{
+  min-height:100vh;
+  display:flex;align-items:center;justify-content:center;
+  position:relative;
+  overflow:hidden;
+  background:
+    radial-gradient(1200px 600px at 50% -15%, var(--emerald-700), var(--emerald-950) 65%);
+  padding:24px;
+}
+#loginScreen::before{
+  content:"";
+  position:absolute;inset:0;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='none' stroke='%23e4efe8' stroke-width='0.6' stroke-opacity='0.14'%3E%3Cpath d='M60 6 L92 32 L92 88 L60 114 L28 88 L28 32 Z'/%3E%3Cpath d='M60 24 L78 38 L78 82 L60 96 L42 82 L42 38 Z'/%3E%3Ccircle cx='60' cy='60' r='14'/%3E%3C/g%3E%3C/svg%3E");
+  background-size:120px 120px;
+  opacity:.5;
+  pointer-events:none;
+}
+.login-card{
+  position:relative;z-index:1;
+  width:100%;max-width:380px;
+  background:var(--white);
+  border-radius:18px;
+  padding:38px 32px 30px;
+  box-shadow:0 24px 70px rgba(0,0,0,.4);
+  text-align:center;
+  border-top:3px solid var(--gold-500);
+}
+.login-emblem{
+  width:72px;height:72px;margin:0 auto 16px;
+  border-radius:50%;
+  background:linear-gradient(160deg,var(--emerald-100),var(--sand-50));
+  display:flex;align-items:center;justify-content:center;
+  color:var(--emerald-700);
+  box-shadow:inset 0 0 0 1px rgba(22,98,72,.15);
+}
+.login-card h1{font-size:23px;margin:0 0 3px;color:var(--emerald-800);letter-spacing:.2px;}
+.login-card p.sub{color:var(--ink-400);font-size:13px;margin:0 0 26px;}
+.login-card .field{text-align:right;}
+#loginError{color:var(--red-600);font-size:13px;min-height:18px;margin-top:10px;}
+
+/* =========================================================
+   App shell (post-login)
+   ========================================================= */
+#app{display:none;min-height:100vh;}
+#app.show{display:flex;}
+.sidebar{
+  width:250px;flex:none;
+  background:var(--emerald-950);
+  color:var(--emerald-100);
+  padding:22px 16px;
+  display:flex;flex-direction:column;
+  gap:4px;
+}
+.sidebar .brand{
+  display:flex;align-items:center;gap:10px;
+  padding:6px 8px 22px;
+  border-bottom:1px solid rgba(255,255,255,.1);
+  margin-bottom:16px;
+}
+.sidebar .brand .dot{
+  width:36px;height:36px;border-radius:10px;
+  background:rgba(255,255,255,.08);
+  display:flex;align-items:center;justify-content:center;
+  flex:none;
+}
+.sidebar .brand div h2{margin:0;font-size:15px;color:var(--white);}
+.sidebar .brand div span{font-size:11px;color:var(--emerald-100);opacity:.7;}
+.navitem{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 12px;border-radius:8px;
+  cursor:pointer;font-size:14px;font-weight:500;
+  color:var(--emerald-100);opacity:.85;
+}
+.navitem:hover{background:rgba(255,255,255,.06);}
+.navitem.active{background:rgba(255,255,255,.12);opacity:1;color:var(--white);}
+.sidebar .spacer{flex:1;}
+.sidebar .who{
+  padding:12px;border-radius:8px;background:rgba(255,255,255,.05);
+  font-size:12.5px;margin-bottom:8px;
+}
+.sidebar .who b{display:block;color:var(--white);font-size:13.5px;margin-bottom:2px;}
+
+.main{flex:1;min-width:0;padding:28px 34px;max-width:1100px;}
+.pagehead{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:22px;gap:16px;flex-wrap:wrap;}
+.pagehead h1{font-size:24px;margin:0 0 4px;color:var(--emerald-900,var(--emerald-800));}
+.pagehead p{margin:0;color:var(--ink-400);font-size:13.5px;}
+.breadcrumb{font-size:13px;color:var(--ink-400);margin-bottom:6px;}
+.breadcrumb span{cursor:pointer;color:var(--emerald-700);}
+.breadcrumb span:hover{text-decoration:underline;}
+
+.page{display:none;}
+.page.active{display:block;}
+
+/* group / student grid cards */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;}
+.tile{
+  padding:18px;cursor:pointer;
+  display:flex;flex-direction:column;gap:8px;
+  transition:transform .1s ease, box-shadow .1s ease;
+}
+.tile:hover{transform:translateY(-2px);box-shadow:0 4px 16px rgba(20,25,20,.1);}
+.tile h3{margin:0;font-size:16.5px;color:var(--emerald-800);}
+.tile .meta{font-size:12.5px;color:var(--ink-400);}
+.tile .bar-bg{height:6px;border-radius:4px;background:var(--sand-100);overflow:hidden;margin-top:4px;}
+.tile .bar-fg{height:100%;background:var(--gold-500);}
+.tile-add{
+  border:1.5px dashed var(--line);background:transparent;box-shadow:none;
+  display:flex;align-items:center;justify-content:center;
+  color:var(--emerald-700);font-weight:700;font-size:14px;min-height:96px;
+}
+.tile-add:hover{background:var(--emerald-100);border-color:var(--emerald-600);}
+
+/* table */
+table{width:100%;border-collapse:collapse;font-size:13.5px;}
+th,td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--line);}
+th{color:var(--ink-600);font-weight:700;font-size:12.5px;background:var(--sand-100);position:sticky;top:0;}
+tbody tr:hover{background:var(--sand-50);}
+.status-pill{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:99px;font-size:12px;font-weight:700;
+}
+.status-not{background:#eee;color:var(--ink-400);}
+.status-progress{background:#fdf1d8;color:#8a6a12;}
+.status-done{background:var(--emerald-100);color:var(--emerald-700);}
+
+.toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
+.toolbar input[type=text],.toolbar input[type=search]{width:auto;min-width:220px;}
+.tag{display:inline-block;padding:2px 9px;border-radius:99px;background:var(--sand-100);font-size:11.5px;color:var(--ink-600);}
+
+/* stat row */
+.stats{display:flex;gap:14px;margin-bottom:20px;flex-wrap:wrap;}
+.stat{padding:16px 20px;min-width:140px;}
+.stat .num{font-family:'Amiri',serif;font-size:28px;color:var(--emerald-800);line-height:1;}
+.stat .lbl{font-size:12px;color:var(--ink-400);margin-top:4px;}
+
+/* modal */
+.overlay{
+  position:fixed;inset:0;background:rgba(15,20,17,.55);
+  display:flex;align-items:center;justify-content:center;padding:20px;z-index:50;
+}
+.overlay.hidden{display:none;}
+.modal{
+  background:var(--white);border-radius:14px;max-width:560px;width:100%;
+  max-height:88vh;overflow-y:auto;padding:26px 26px 22px;
+}
+.modal h2{margin:0 0 18px;font-size:19px;color:var(--emerald-800);}
+.modal .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:6px;}
+.close-x{position:absolute;left:18px;top:16px;background:none;border:none;font-size:20px;color:var(--ink-400);cursor:pointer;}
+.modal{position:relative;}
+
+/* surah editor */
+.surah-search{margin-bottom:12px;}
+.surah-row td{vertical-align:middle;}
+.surah-row .snum{color:var(--ink-400);font-size:12px;width:24px;}
+.surah-row select{width:auto;min-width:110px;padding:5px 8px;font-size:12.5px;}
+.surah-row input[type=number]{width:70px;padding:5px 8px;font-size:12.5px;}
+.mini-note{font-size:11.5px;color:var(--ink-400);}
+
+.badge-first{background:var(--gold-100);color:var(--gold-500);}
+.podium-card{display:flex;gap:10px;padding:14px;align-items:center;}
+.podium-rank{
+  width:34px;height:34px;border-radius:50%;flex:none;
+  display:flex;align-items:center;justify-content:center;
+  font-family:'Amiri',serif;font-weight:700;font-size:16px;
+  color:var(--white);
+}
+.rank1{background:#c9a227;} .rank2{background:#9aa0a6;} .rank3{background:#a9713f;}
+
+.empty{
+  text-align:center;padding:50px 20px;color:var(--ink-400);
+}
+.empty .btn{margin-top:12px;}
+
+.readonly-header{
+  background:linear-gradient(135deg,var(--emerald-800),var(--emerald-950));
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90' viewBox='0 0 90 90'%3E%3Cg fill='none' stroke='%23ffffff' stroke-width='0.5' stroke-opacity='0.08'%3E%3Cpath d='M45 4 L70 24 L70 66 L45 86 L20 66 L20 24 Z'/%3E%3Ccircle cx='45' cy='45' r='10'/%3E%3C/g%3E%3C/svg%3E"),
+    linear-gradient(135deg,var(--emerald-800),var(--emerald-950));
+  background-size:90px 90px, cover;
+  color:var(--white);border-radius:14px;padding:26px 28px;margin-bottom:22px;
+  display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;
+  border-top:3px solid var(--gold-500);
+}
+.readonly-header h1{margin:0;font-size:22px;color:var(--white);}
+.readonly-header p{margin:4px 0 0;color:var(--emerald-100);font-size:13px;opacity:.85;}
+.ring-wrap{display:flex;align-items:center;gap:14px;}
+.ring{width:74px;height:74px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Amiri',serif;font-size:15px;font-weight:700;
+  background:conic-gradient(var(--gold-500) calc(var(--pct)*1%), rgba(255,255,255,.18) 0);}
+.ring inner{}
+.ring .inner{width:56px;height:56px;border-radius:50%;background:var(--emerald-950);display:flex;align-items:center;justify-content:center;color:var(--white);}
+
+.toast{
+  position:fixed;bottom:22px;left:50%;transform:translateX(-50%);
+  background:var(--ink-900);color:var(--white);padding:11px 20px;border-radius:99px;
+  font-size:13.5px;z-index:100;box-shadow:0 6px 20px rgba(0,0,0,.25);
+  opacity:0;pointer-events:none;transition:opacity .25s ease, transform .25s ease;
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(-6px);}
+
+@media (max-width:760px){
+  #app.show{flex-direction:column;}
+  .sidebar{width:100%;flex-direction:row;overflow-x:auto;padding:12px;align-items:center;}
+  .sidebar .brand{border:none;padding:0 10px 0 0;margin:0;}
+  .sidebar .spacer{display:none;}
+  .sidebar .who{display:none;}
+  .main{padding:18px;}
+  .modal{padding:20px 18px;}
+}
+</style>
+</head>
+<body>
+
+<!-- =========================================================
+     شاشة الإعداد الأولى — تظهر فقط إذا لم يتم ربط Firebase بعد
+     ========================================================= -->
+<div id="setupScreen">
+  <div class="card" style="padding:28px 26px;">
+    <h1 class="serif" style="color:var(--emerald-800);font-size:22px;margin-top:0;">إعداد مركز الإسراء القرآني</h1>
+    <p style="color:var(--ink-600);line-height:1.9;font-size:14.5px;">
+      هاي المرة الأولى اللي بتفتح فيها الموقع. الصق بيانات Firebase (firebaseConfig) اللي حصلت عليها
+      من مشروعك، وبعدين اضغط "بدء التشغيل". هاي الخطوة بتنعمل مرة وحدة بس على هالجهاز/المتصفح
+      — أي شخص تاني بفتح نفس الملف لازم يعمل نفس الشي أول مرة (أو تخزن نسخة الملف بعد التعديل
+      وترسلها/تنشرها جاهزة).
+    </p>
+    <div class="field">
+      <label>الصق كود firebaseConfig هون (تقدر تلصق السطر كامل زي ما هو من Firebase، حتى لو فيه "const firebaseConfig =")</label>
+      <textarea id="cfgInput" placeholder='{
+  "apiKey": "...",
+  "authDomain": "...",
+  "projectId": "...",
+  ...
+}'></textarea>
+    </div>
+    <button class="btn btn-primary" onclick="saveConfig()">بدء التشغيل</button>
+    <p id="setupError" style="color:var(--red-600);font-size:13px;margin-top:10px;"></p>
+    <hr style="border:none;border-top:1px solid var(--line);margin:22px 0;">
+    <p style="font-size:13px;color:var(--ink-400);line-height:1.8;">
+      ما عندك مشروع Firebase بعد؟ اتبع الخطوات المرفقة معك بالرسالة لإنشاء واحد مجاني بخمس دقائق،
+      ثم فعّل <b>Firestore Database</b> واختر وضع "Start in test mode"، وانسخ الإعدادات من
+      Project settings → عرّف تطبيق ويب (</> ) → Config.
+    </p>
+  </div>
+</div>
+
+<!-- =========================================================
+     شاشة الدخول
+     ========================================================= -->
+<div id="loginScreen" class="hidden">
+  <div class="login-card">
+    <div class="login-emblem">
+      <svg width="36" height="36" viewBox="0 0 48 48" fill="none">
+        <path d="M24 10c-5 1.5-10 4-13 6.5V38c3-2.5 8-4.5 13-5.5V10Z" fill="var(--emerald-700)" opacity=".12"/>
+        <path d="M24 10c5 1.5 10 4 13 6.5V38c-3-2.5-8-4.5-13-5.5V10Z" fill="var(--emerald-700)" opacity=".12"/>
+        <path d="M24 10c-5 1.5-10 4-13 6.5V38c3-2.5 8-4.5 13-5.5M24 10c5 1.5 10 4 13 6.5V38c-3-2.5-8-4.5-13-5.5M24 10v22.5"
+              stroke="var(--emerald-700)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+        <path d="M14 20.5h6.5M14 24.5h6.5M27.5 20.5H34M27.5 24.5H34" stroke="var(--gold-500)" stroke-width="1.3" stroke-linecap="round"/>
+        <path d="M24 6.5l1.4 2.9 3.1.4-2.3 2.2.6 3.1L24 13.6l-2.8 1.5.6-3.1-2.3-2.2 3.1-.4L24 6.5Z" fill="var(--gold-500)"/>
+      </svg>
+    </div>
+    <h1 class="serif">مركز الإسراء القرآني</h1>
+    <p class="sub">متابعة حفظ كتاب الله الكريم</p>
+    <div class="field">
+      <label>كلمة السر</label>
+      <input type="password" id="loginPass" placeholder="أدخل كلمة السر" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="btn btn-primary" style="width:100%;" onclick="doLogin()">دخول</button>
+    <div id="loginError"></div>
+  </div>
+</div>
+
+<!-- =========================================================
+     التطبيق (بعد الدخول)
+     ========================================================= -->
+<div id="app">
+  <div class="sidebar" id="sidebarNav"><!-- يُبنى بجافاسكربت حسب الدور --></div>
+  <div class="main" id="mainArea"><!-- يُبنى بجافاسكربت --></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* =========================================================
+   بيانات ثابتة: قائمة السور الـ114 (الترتيب المصحفي)
+   ========================================================= */
+const SURAHS = [
+["الفاتحة",7],["البقرة",286],["آل عمران",200],["النساء",176],["المائدة",120],
+["الأنعام",165],["الأعراف",206],["الأنفال",75],["التوبة",129],["يونس",109],
+["هود",123],["يوسف",111],["الرعد",43],["إبراهيم",52],["الحجر",99],
+["النحل",128],["الإسراء",111],["الكهف",110],["مريم",98],["طه",135],
+["الأنبياء",112],["الحج",78],["المؤمنون",118],["النور",64],["الفرقان",77],
+["الشعراء",227],["النمل",93],["القصص",88],["العنكبوت",69],["الروم",60],
+["لقمان",34],["السجدة",30],["الأحزاب",73],["سبأ",54],["فاطر",45],
+["يس",83],["الصافات",182],["ص",88],["الزمر",75],["غافر",85],
+["فصلت",54],["الشورى",53],["الزخرف",89],["الدخان",59],["الجاثية",37],
+["الأحقاف",35],["محمد",38],["الفتح",29],["الحجرات",18],["ق",45],
+["الذاريات",60],["الطور",49],["النجم",62],["القمر",55],["الرحمن",78],
+["الواقعة",96],["الحديد",29],["المجادلة",22],["الحشر",24],["الممتحنة",13],
+["الصف",14],["الجمعة",11],["المنافقون",11],["التغابن",18],["الطلاق",12],
+["التحريم",12],["الملك",30],["القلم",52],["الحاقة",52],["المعارج",44],
+["نوح",28],["الجن",28],["المزمل",20],["المدثر",56],["القيامة",40],
+["الإنسان",31],["المرسلات",50],["النبأ",40],["النازعات",46],["عبس",42],
+["التكوير",29],["الانفطار",19],["المطففين",36],["الانشقاق",25],["البروج",22],
+["الطارق",17],["الأعلى",19],["الغاشية",26],["الفجر",30],["البلد",20],
+["الشمس",15],["الليل",21],["الضحى",11],["الشرح",8],["التين",8],
+["العلق",19],["القدر",5],["البينة",8],["الزلزلة",8],["العاديات",11],
+["القارعة",11],["التكاثر",8],["العصر",3],["الهمزة",9],["الفيل",5],
+["قريش",4],["الماعون",7],["الكوثر",3],["الكافرون",6],["النصر",3],
+["المسد",5],["الإخلاص",4],["الفلق",5],["الناس",6]
+].map((s,i)=>({num:i+1, name:s[0], ayahs:s[1]}));
+
+const GRADES = ["ممتاز","جيد جدًا","جيد","مقبول"];
+
+const BRAND_ICON = `<svg width="20" height="20" viewBox="0 0 48 48" fill="none">
+  <path d="M24 10c-5 1.5-10 4-13 6.5V38c3-2.5 8-4.5 13-5.5M24 10c5 1.5 10 4 13 6.5V38c-3-2.5-8-4.5-13-5.5M24 10v22.5"
+        stroke="#e4b74a" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M14 20.5h6M14 24.5h6M28 20.5h6M28 24.5h6" stroke="#e4b74a" stroke-width="1.2" stroke-linecap="round" opacity=".7"/>
+</svg>`;
+
+/* =========================================================
+   حالة عامة
+   ========================================================= */
+let db=null, unsubGroups=null, unsubStudents=null, unsubAdmins=null, unsubCycles=null;
+let GROUPS=[], STUDENTS=[], ADMINS=[], CYCLES=[];
+let session = null; // {role:'admin'|'student', name, id}
+let currentGroupId = null;
+let dataReady = false;
+
+/* ---------------- إعداد Firebase ---------------- */
+function saveConfig(){
+  const raw = document.getElementById('cfgInput').value.trim();
+  const errEl = document.getElementById('setupError');
+  errEl.textContent = '';
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if(start===-1 || end===-1 || end<start){
+    errEl.textContent = 'ما لقيت أقواس { } بالنص. تأكد إنك لصقت كود الإعدادات كامل من Firebase.';
+    return;
+  }
+  const objStr = raw.slice(start, end+1);
+  try{
+    const cfg = Function('"use strict";return (' + objStr + ')')();
+    if(!cfg.apiKey || !cfg.projectId) throw new Error('بيانات ناقصة');
+    localStorage.setItem('isra_fb_config', JSON.stringify(cfg));
+    location.reload();
+  }catch(e){
+    errEl.textContent = 'تعذّر قراءة الكود (' + e.message + '). تأكد إنك لصقت كود الإعدادات كامل وصحيح من Firebase، بما فيه apiKey و projectId.';
+  }
+}
+
+function boot(){
+  const saved = localStorage.getItem('isra_fb_config');
+  if(!saved){
+    document.getElementById('setupScreen').classList.remove('hidden');
+    return;
+  }
+  try{
+    const cfg = JSON.parse(saved);
+    firebase.initializeApp(cfg);
+    db = firebase.firestore();
+  }catch(e){
+    localStorage.removeItem('isra_fb_config');
+    document.getElementById('setupScreen').classList.remove('hidden');
+    document.getElementById('setupError').textContent = 'حدث خطأ بالاتصال، أعد لصق البيانات.';
+    return;
+  }
+  const savedSession = sessionStorage.getItem('isra_session');
+  subscribeAll(()=>{
+    if(savedSession){
+      session = JSON.parse(savedSession);
+      showApp();
+    } else {
+      document.getElementById('loginScreen').classList.remove('hidden');
+    }
+  });
+}
+
+/* ---------------- اشتراكات لحظية Firestore ---------------- */
+function subscribeAll(onFirstLoad){
+  let loaded = {g:false,s:false,a:false,c:false};
+  const checkLoaded = ()=>{
+    if(Object.values(loaded).every(Boolean) && !dataReady){
+      dataReady = true;
+      onFirstLoad && onFirstLoad();
+    }
+  };
+  unsubGroups = db.collection('groups').orderBy('createdAt').onSnapshot(snap=>{
+    GROUPS = snap.docs.map(d=>({id:d.id,...d.data()}));
+    loaded.g = true; checkLoaded(); render();
+  }, err=>toast('تعذّر تحميل المجموعات: '+err.code));
+
+  unsubStudents = db.collection('students').onSnapshot(snap=>{
+    STUDENTS = snap.docs.map(d=>({id:d.id,...d.data()}));
+    loaded.s = true; checkLoaded(); render();
+  }, err=>toast('تعذّر تحميل الطلاب: '+err.code));
+
+  unsubAdmins = db.collection('admins').onSnapshot(snap=>{
+    ADMINS = snap.docs.map(d=>({id:d.id,...d.data()}));
+    loaded.a = true; checkLoaded(); render();
+  }, err=>toast('تعذّر تحميل المسؤولين: '+err.code));
+
+  unsubCycles = db.collection('cycles').orderBy('date','desc').onSnapshot(snap=>{
+    CYCLES = snap.docs.map(d=>({id:d.id,...d.data()}));
+    loaded.c = true; checkLoaded(); render();
+  }, err=>toast('تعذّر تحميل الدورات: '+err.code));
+}
+
+/* ---------------- تسجيل الدخول ---------------- */
+function doLogin(){
+  const pass = document.getElementById('loginPass').value.trim();
+  const errEl = document.getElementById('loginError');
+  errEl.textContent='';
+  if(!pass){ errEl.textContent='الرجاء إدخال كلمة السر'; return; }
+
+  if(ADMINS.length===0 && STUDENTS.length===0 && GROUPS.length===0){
+    // أول تشغيل بالمطلق: لا يوجد أي مسؤول بعد — أنشئ أول مسؤول تلقائيًا بهذه الكلمة
+    db.collection('admins').add({name:'المسؤول الأول', password:pass, createdAt: Date.now()})
+      .then(ref=>{
+        session = {role:'admin', name:'المسؤول الأول', id:ref.id};
+        sessionStorage.setItem('isra_session', JSON.stringify(session));
+        showApp();
+      });
+    return;
+  }
+
+  const admin = ADMINS.find(a=>a.password===pass);
+  if(admin){
+    session = {role:'admin', name:admin.name, id:admin.id};
+    sessionStorage.setItem('isra_session', JSON.stringify(session));
+    showApp();
+    return;
+  }
+  const student = STUDENTS.find(s=>s.password===pass);
+  if(student){
+    session = {role:'student', name:student.name, id:student.id};
+    sessionStorage.setItem('isra_session', JSON.stringify(session));
+    showApp();
+    return;
+  }
+  errEl.textContent = 'كلمة السر غير صحيحة';
+}
+
+function logout(){
+  sessionStorage.removeItem('isra_session');
+  session=null; currentGroupId=null;
+  document.getElementById('app').classList.remove('show');
+  document.getElementById('loginScreen').classList.remove('hidden');
+  document.getElementById('loginPass').value='';
+}
+
+function showApp(){
+  document.getElementById('loginScreen').classList.add('hidden');
+  document.getElementById('app').classList.add('show');
+  render();
+}
+
+/* ---------------- أدوات مساعدة ---------------- */
+function toast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('show');
+  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),2600);
+}
+function esc(s){ return (s||'').toString().replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function newId(){ return Math.random().toString(36).slice(2,10); }
+
+function studentProgress(st){
+  const surahs = st.surahs||{};
+  let done=0;
+  SURAHS.forEach(s=>{ if(surahs[s.num] && surahs[s.num].status==='memorized') done++; });
+  return {done, total:114, pct: Math.round(done/114*100)};
+}
+
+/* =========================================================
+   العرض الرئيسي
+   ========================================================= */
+let activeTab = 'groups';
+
+function render(){
+  if(!session) return;
+  if(session.role==='admin') renderAdmin(); else renderStudentView();
+}
+
+/* ---------------------------------------------------------
+   واجهة المسؤول
+   --------------------------------------------------------- */
+function renderAdmin(){
+  const sb = document.getElementById('sidebarNav');
+  sb.innerHTML = `
+    <div class="brand"><div class="dot">${BRAND_ICON}</div><div><h2>مركز الإسراء</h2><span>لوحة المسؤول</span></div></div>
+    <div class="navitem ${activeTab==='groups'?'active':''}" onclick="setTab('groups')">📚 المجموعات</div>
+    <div class="navitem ${activeTab==='admins'?'active':''}" onclick="setTab('admins')">🔑 المسؤولون</div>
+    <div class="spacer"></div>
+    <div class="who"><b>${esc(session.name)}</b>مسؤول النظام</div>
+    <div class="navitem" onclick="logout()">🚪 تسجيل خروج</div>
+  `;
+  const main = document.getElementById('mainArea');
+  if(activeTab==='groups'){
+    main.innerHTML = currentGroupId ? groupDetailHTML(currentGroupId) : groupsListHTML();
+  } else {
+    main.innerHTML = adminsPageHTML();
+  }
+}
+function setTab(t){ activeTab=t; currentGroupId=null; render(); }
+function openGroup(id){ currentGroupId=id; render(); }
+function backToGroups(){ currentGroupId=null; render(); }
+
+function groupsListHTML(){
+  let tiles = GROUPS.map(g=>{
+    const studs = STUDENTS.filter(s=>s.groupId===g.id);
+    const avgPct = studs.length? Math.round(studs.reduce((a,s)=>a+studentProgress(s).pct,0)/studs.length):0;
+    return `<div class="card tile" onclick="openGroup('${g.id}')">
+      <h3>${esc(g.name)}</h3>
+      <div class="meta">${studs.length} طالب</div>
+      <div class="bar-bg"><div class="bar-fg" style="width:${avgPct}%"></div></div>
+      <div class="meta">متوسط الإنجاز ${avgPct}%</div>
+    </div>`;
+  }).join('');
+  return `
+    <div class="pagehead"><div><h1>المجموعات</h1><p>أضف مجموعة بأي وقت وتابع تقدّم كل طالب فيها</p></div></div>
+    <div class="grid">
+      ${tiles}
+      <button class="card tile tile-add" onclick="openModal('addGroup')">+ إضافة مجموعة</button>
+    </div>
+  `;
+}
+
+function groupDetailHTML(gid){
+  const g = GROUPS.find(x=>x.id===gid);
+  if(!g) { currentGroupId=null; return groupsListHTML(); }
+  const studs = STUDENTS.filter(s=>s.groupId===gid);
+  const cycles = CYCLES.filter(c=>c.groupId===gid);
+
+  let rows = studs.map(s=>{
+    const p = studentProgress(s);
+    return `<tr>
+      <td><b>${esc(s.name)}</b></td>
+      <td>${p.done} / 114</td>
+      <td style="min-width:120px;"><div class="bar-bg"><div class="bar-fg" style="width:${p.pct}%"></div></div></td>
+      <td>${p.pct}%</td>
+      <td style="direction:ltr;text-align:left;">${esc(s.password)}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="openStudent('${s.id}')">فتح السجل</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteStudent('${s.id}','${esc(s.name)}')">حذف</button></td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="6" style="text-align:center;color:var(--ink-400);padding:24px;">لا يوجد طلاب بعد بهذه المجموعة</td></tr>`;
+
+  let podium = cycles.map(c=>{
+    const nm = id => (STUDENTS.find(s=>s.id===id)||{}).name || '—';
+    return `<div class="card" style="padding:14px 16px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span class="tag">${esc(c.date||'')}</span>
+        <button class="btn btn-danger btn-sm" onclick="deleteCycle('${c.id}')">حذف</button>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="podium-card" style="flex:1;min-width:140px;"><div class="podium-rank rank1">1</div><div>${esc(nm(c.first))}</div></div>
+        <div class="podium-card" style="flex:1;min-width:140px;"><div class="podium-rank rank2">2</div><div>${esc(nm(c.second))}</div></div>
+        <div class="podium-card" style="flex:1;min-width:140px;"><div class="podium-rank rank3">3</div><div>${esc(nm(c.third))}</div></div>
+      </div>
+    </div>`;
+  }).join('') || `<p class="mini-note">لا توجد دورات مسجّلة لهذه المجموعة بعد.</p>`;
+
+  return `
+    <div class="breadcrumb"><span onclick="backToGroups()">المجموعات</span> ← ${esc(g.name)}</div>
+    <div class="pagehead">
+      <div><h1>${esc(g.name)}</h1><p>${studs.length} طالب مسجّل بهذه المجموعة</p></div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-ghost" onclick="openModal('addCycle','${gid}')">🏆 إضافة دورة أوائل</button>
+        <button class="btn btn-primary" onclick="openModal('addStudent','${gid}')">+ إضافة طالب</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding:16px 18px;overflow-x:auto;margin-bottom:26px;">
+      <table>
+        <thead><tr><th>الاسم</th><th>سور محفوظة</th><th>نسبة الإنجاز</th><th></th><th>كلمة السر</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+
+    <h2 class="serif" style="font-size:17px;color:var(--emerald-800);">🏆 الأوائل الثلاث</h2>
+    ${podium}
+  `;
+}
+
+function adminsPageHTML(){
+  let rows = ADMINS.map(a=>`
+    <tr>
+      <td><b>${esc(a.name)}</b></td>
+      <td style="direction:ltr;text-align:left;">${esc(a.password)}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteAdmin('${a.id}','${esc(a.name)}')" ${ADMINS.length<=1?'disabled title="لا يمكن حذف آخر مسؤول"':''}>إزالة</button></td>
+    </tr>`).join('');
+  return `
+    <div class="pagehead">
+      <div><h1>المسؤولون</h1><p>أي شخص هون إله صلاحية كاملة للتعديل بالنظام</p></div>
+      <button class="btn btn-primary" onclick="openModal('addAdmin')">+ إضافة مسؤول</button>
+    </div>
+    <div class="card" style="padding:16px 18px;overflow-x:auto;">
+      <table><thead><tr><th>الاسم</th><th>كلمة السر</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    </div>
+  `;
+}
+
+/* ---------------------------------------------------------
+   سجل الطالب (تحرير من قبل المسؤول)
+   --------------------------------------------------------- */
+let editingStudentId = null;
+let surahFilter = '';
+
+function openStudent(id){
+  editingStudentId = id; surahFilter='';
+  document.getElementById('modalOverlay').classList.remove('hidden');
+  document.getElementById('modalBody').innerHTML = studentEditorHTML(id);
+}
+
+function studentEditorHTML(id){
+  const st = STUDENTS.find(s=>s.id===id);
+  if(!st) return '';
+  const p = studentProgress(st);
+  const rows = SURAHS.filter(s=> !surahFilter || s.name.includes(surahFilter)).map(s=>{
+    const rec = (st.surahs && st.surahs[s.num]) || {status:'not_started', ayah:0, grade:''};
+    return `<tr class="surah-row">
+      <td class="snum">${s.num}</td>
+      <td>${s.name} <span class="mini-note">(${s.ayahs} آية)</span></td>
+      <td>
+        <select onchange="updateSurah('${id}',${s.num},'status',this.value)">
+          <option value="not_started" ${rec.status==='not_started'?'selected':''}>لم يبدأ</option>
+          <option value="in_progress" ${rec.status==='in_progress'?'selected':''}>قيد الحفظ</option>
+          <option value="memorized" ${rec.status==='memorized'?'selected':''}>محفوظة</option>
+        </select>
+      </td>
+      <td>
+        <input type="number" min="0" max="${s.ayahs}" value="${rec.ayah||0}" placeholder="الآية"
+          onchange="updateSurah('${id}',${s.num},'ayah',this.value)"
+          ${rec.status==='memorized'?'disabled':''}>
+      </td>
+      <td>
+        <select onchange="updateSurah('${id}',${s.num},'grade',this.value)">
+          <option value="">التقدير</option>
+          ${GRADES.map(g=>`<option value="${g}" ${rec.grade===g?'selected':''}>${g}</option>`).join('')}
+        </select>
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <button class="close-x" onclick="closeModal()">✕</button>
+    <h2>${esc(st.name)}</h2>
+    <div class="stats">
+      <div class="card stat"><div class="num">${p.done}/114</div><div class="lbl">سور محفوظة</div></div>
+      <div class="card stat"><div class="num">${p.pct}%</div><div class="lbl">نسبة الإنجاز</div></div>
+    </div>
+    <div class="row2" style="margin-bottom:16px;">
+      <div class="field"><label>الاسم</label><input value="${esc(st.name)}" onchange="updateStudentField('${id}','name',this.value)"></div>
+      <div class="field"><label>كلمة السر</label><input value="${esc(st.password)}" onchange="updateStudentField('${id}','password',this.value)" style="direction:ltr;text-align:left;"></div>
+    </div>
+    <input type="search" class="surah-search" placeholder="ابحث عن سورة..." value="${esc(surahFilter)}" oninput="surahFilter=this.value; document.getElementById('modalBody').innerHTML=studentEditorHTML('${id}');">
+    <div style="max-height:360px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;">
+      <table>
+        <thead><tr><th></th><th>السورة</th><th>الحالة</th><th>وصل للآية</th><th>التقدير</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إغلاق</button></div>
+  `;
+}
+
+function updateSurah(studentId, num, field, value){
+  const st = STUDENTS.find(s=>s.id===studentId);
+  const surahs = {...(st.surahs||{})};
+  const rec = {...(surahs[num]||{status:'not_started',ayah:0,grade:''})};
+  if(field==='ayah') rec.ayah = Number(value)||0;
+  else rec[field]=value;
+  if(field==='status' && value==='memorized'){
+    const s = SURAHS.find(x=>x.num===num); rec.ayah = s.ayahs;
+  }
+  surahs[num]=rec;
+  db.collection('students').doc(studentId).update({surahs}).then(()=>{
+    if(editingStudentId===studentId) document.getElementById('modalBody').innerHTML = studentEditorHTML(studentId);
+  });
+}
+function updateStudentField(id,field,value){
+  db.collection('students').doc(id).update({[field]:value});
+  toast('تم الحفظ');
+}
+function deleteStudent(id,name){
+  if(!confirm(`حذف الطالب "${name}" نهائيًا؟`)) return;
+  db.collection('students').doc(id).delete().then(()=>toast('تم الحذف'));
+}
+function deleteAdmin(id,name){
+  if(ADMINS.length<=1){ toast('لازم يبقى مسؤول واحد على الأقل'); return; }
+  if(!confirm(`إزالة صلاحية "${name}"؟`)) return;
+  db.collection('admins').doc(id).delete().then(()=>toast('تمت الإزالة'));
+}
+function deleteCycle(id){
+  if(!confirm('حذف هذه الدورة؟')) return;
+  db.collection('cycles').doc(id).delete();
+}
+
+/* ---------------------------------------------------------
+   نوافذ الإضافة (مودال)
+   --------------------------------------------------------- */
+function openModal(kind, arg){
+  const body = document.getElementById('modalBody');
+  document.getElementById('modalOverlay').classList.remove('hidden');
+  if(kind==='addGroup'){
+    body.innerHTML = `
+      <button class="close-x" onclick="closeModal()">✕</button>
+      <h2>إضافة مجموعة جديدة</h2>
+      <div class="field"><label>اسم المجموعة</label><input id="ngName" placeholder="مثال: مجموعة الأشبال"></div>
+      <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button>
+      <button class="btn btn-primary" onclick="submitGroup()">إضافة</button></div>`;
+  }
+  if(kind==='addStudent'){
+    body.innerHTML = `
+      <button class="close-x" onclick="closeModal()">✕</button>
+      <h2>إضافة طالب جديد</h2>
+      <div class="field"><label>اسم الطالب</label><input id="nsName" placeholder="الاسم الكامل"></div>
+      <div class="field"><label>كلمة السر الخاصة بالطالب (تُعطى لولي الأمر)</label><input id="nsPass" style="direction:ltr;text-align:left;" placeholder="مثال: k7x92"></div>
+      <input type="hidden" id="nsGroup" value="${arg}">
+      <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button>
+      <button class="btn btn-primary" onclick="submitStudent()">إضافة</button></div>`;
+  }
+  if(kind==='addAdmin'){
+    body.innerHTML = `
+      <button class="close-x" onclick="closeModal()">✕</button>
+      <h2>إضافة مسؤول جديد</h2>
+      <div class="field"><label>الاسم</label><input id="naName"></div>
+      <div class="field"><label>كلمة السر</label><input id="naPass" style="direction:ltr;text-align:left;"></div>
+      <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button>
+      <button class="btn btn-primary" onclick="submitAdmin()">إضافة</button></div>`;
+  }
+  if(kind==='addCycle'){
+    const studs = STUDENTS.filter(s=>s.groupId===arg);
+    const opts = studs.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    body.innerHTML = `
+      <button class="close-x" onclick="closeModal()">✕</button>
+      <h2>إضافة دورة أوائل</h2>
+      <div class="field"><label>التاريخ</label><input type="date" id="ncDate" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="field"><label>🥇 المركز الأول</label><select id="ncFirst"><option value="">اختر طالب</option>${opts}</select></div>
+      <div class="field"><label>🥈 المركز الثاني</label><select id="ncSecond"><option value="">اختر طالب</option>${opts}</select></div>
+      <div class="field"><label>🥉 المركز الثالث</label><select id="ncThird"><option value="">اختر طالب</option>${opts}</select></div>
+      <input type="hidden" id="ncGroup" value="${arg}">
+      <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button>
+      <button class="btn btn-primary" onclick="submitCycle()">حفظ</button></div>`;
+  }
+}
+function closeModal(){
+  document.getElementById('modalOverlay').classList.add('hidden');
+  editingStudentId = null;
+}
+function submitGroup(){
+  const name = document.getElementById('ngName').value.trim();
+  if(!name) return toast('اكتب اسم المجموعة');
+  db.collection('groups').add({name, createdAt: Date.now()}).then(()=>{closeModal();toast('تمت الإضافة');});
+}
+function submitStudent(){
+  const name = document.getElementById('nsName').value.trim();
+  const pass = document.getElementById('nsPass').value.trim();
+  const groupId = document.getElementById('nsGroup').value;
+  if(!name || !pass) return toast('عبّي الاسم وكلمة السر');
+  db.collection('students').add({name, password:pass, groupId, surahs:{}, joinDate:new Date().toISOString().slice(0,10)})
+    .then(()=>{closeModal();toast('تمت إضافة الطالب');});
+}
+function submitAdmin(){
+  const name = document.getElementById('naName').value.trim();
+  const pass = document.getElementById('naPass').value.trim();
+  if(!name || !pass) return toast('عبّي الاسم وكلمة السر');
+  db.collection('admins').add({name, password:pass, createdAt:Date.now()}).then(()=>{closeModal();toast('تمت الإضافة');});
+}
+function submitCycle(){
+  const date = document.getElementById('ncDate').value;
+  const first = document.getElementById('ncFirst').value;
+  const second = document.getElementById('ncSecond').value;
+  const third = document.getElementById('ncThird').value;
+  const groupId = document.getElementById('ncGroup').value;
+  if(!date || !first) return toast('حدد التاريخ والمركز الأول على الأقل');
+  db.collection('cycles').add({date, first, second, third, groupId}).then(()=>{closeModal();toast('تم الحفظ');});
+}
+
+/* ---------------------------------------------------------
+   واجهة الطالب (للاطلاع فقط)
+   --------------------------------------------------------- */
+function renderStudentView(){
+  const sb = document.getElementById('sidebarNav');
+  sb.innerHTML = `
+    <div class="brand"><div class="dot">${BRAND_ICON}</div><div><h2>مركز الإسراء</h2><span>سجل الحفظ</span></div></div>
+    <div class="spacer"></div>
+    <div class="who"><b>${esc(session.name)}</b>وضع الاطلاع فقط</div>
+    <div class="navitem" onclick="logout()">🚪 تسجيل خروج</div>
+  `;
+  const st = STUDENTS.find(s=>s.id===session.id);
+  const main = document.getElementById('mainArea');
+  if(!st){ main.innerHTML = `<div class="empty">تعذّر إيجاد السجل.</div>`; return; }
+  const p = studentProgress(st);
+  const group = GROUPS.find(g=>g.id===st.groupId);
+  const myCycles = CYCLES.filter(c=> c.groupId===st.groupId && (c.first===st.id||c.second===st.id||c.third===st.id));
+
+  const rows = SURAHS.map(s=>{
+    const rec = (st.surahs && st.surahs[s.num]) || {status:'not_started', ayah:0, grade:''};
+    const pillClass = rec.status==='memorized'?'status-done':rec.status==='in_progress'?'status-progress':'status-not';
+    const pillText = rec.status==='memorized'?'محفوظة ✓':rec.status==='in_progress'?`قيد الحفظ (آية ${rec.ayah||0})`:'لم يبدأ';
+    return `<tr>
+      <td class="mini-note">${s.num}</td>
+      <td>${s.name}</td>
+      <td><span class="status-pill ${pillClass}">${pillText}</span></td>
+      <td>${rec.grade || '—'}</td>
+    </tr>`;
+  }).join('');
+
+  let cyclesHTML = myCycles.map(c=>{
+    const rank = c.first===st.id?1:c.second===st.id?2:3;
+    return `<div class="podium-card card" style="margin-bottom:8px;">
+      <div class="podium-rank rank${rank}">${rank}</div>
+      <div>حقق المركز ${rank===1?'الأول 🥇':rank===2?'الثاني 🥈':'الثالث 🥉'} — <span class="mini-note">${esc(c.date)}</span></div>
+    </div>`;
+  }).join('') || `<p class="mini-note">لا توجد نتائج دورات بعد.</p>`;
+
+  main.innerHTML = `
+    <div class="readonly-header">
+      <div>
+        <h1>${esc(st.name)}</h1>
+        <p>${group? esc(group.name):'—'} · منضم منذ ${esc(st.joinDate||'')}</p>
+      </div>
+      <div class="ring-wrap">
+        <div class="ring" style="--pct:${p.pct}"><div class="inner">${p.pct}%</div></div>
+        <div style="color:var(--white);">
+          <div style="font-family:'Amiri',serif;font-size:22px;">${p.done} / 114</div>
+          <div style="font-size:12px;opacity:.8;">سورة محفوظة</div>
+        </div>
+      </div>
+    </div>
+
+    <h2 class="serif" style="font-size:17px;color:var(--emerald-800);">🏆 الأوائل الثلاث</h2>
+    ${cyclesHTML}
+
+    <h2 class="serif" style="font-size:17px;color:var(--emerald-800);margin-top:24px;">سجل الحفظ التفصيلي</h2>
+    <div class="card" style="padding:14px 16px;overflow-x:auto;">
+      <table><thead><tr><th></th><th>السورة</th><th>الحالة</th><th>التقدير</th></tr></thead><tbody>${rows}</tbody></table>
+    </div>
+  `;
+}
+
+/* boot */
+boot();
+</script>
+
+<!-- overlay modal مشترك -->
+<div class="overlay hidden" id="modalOverlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modalBody"></div>
+</div>
+
+</body>
+</html>
