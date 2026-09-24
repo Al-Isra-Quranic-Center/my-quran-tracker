@@ -661,6 +661,25 @@ function openGroup(id){ currentGroupId=id; render(); }
 function backToGroups(){ currentGroupId=null; render(); }
 function openProgram(id){ currentProgramId=id; render(); }
 function programLabel(p){ return `${p.type} ${p.year}`; }
+/* يدعم الحقل الجديد (مصفوفة programIds) والحقل القديم (programId مفرد) معًا لعدم فقدان أي بيانات سابقة */
+function studentProgramIds(s){ return s.programIds || (s.programId? [s.programId]: []); }
+function studentInProgram(s,pid){ return studentProgramIds(s).includes(pid); }
+/* يولّد تواريخ أيام الدوام لبرنامج معيّن حسب نوعه ومدته: الدائم = كل سبت، الشتوي/الصيفي = سبت واثنين وأربعاء */
+function programSessionDates(p){
+  if(!p || !p.startDate || !p.endDate) return [];
+  const isWinterSummer = p.type==='النادي الشتوي' || p.type==='النادي الصيفي';
+  const allowedDays = isWinterSummer? [6,1,3] : [6];
+  const dates=[];
+  let d = new Date(p.startDate+'T00:00:00');
+  const end = new Date(p.endDate+'T00:00:00');
+  let guard=0;
+  while(d<=end && guard<2000){
+    if(allowedDays.includes(d.getDay())) dates.push(d.toISOString().slice(0,10));
+    d.setDate(d.getDate()+1);
+    guard++;
+  }
+  return dates;
+}
 function rangeLabel(g){
   let parts=[];
   if(g.ageMin!=null && g.ageMax!=null && g.ageMin!=='' && g.ageMax!=='') parts.push(`العمر ${g.ageMin}-${g.ageMax}`);
@@ -697,6 +716,7 @@ function groupsListHTML(){
         <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteGroup('${g.id}','${esc(g.name)}')" title="حذف المجموعة" style="padding:2px 9px;">✕</button>
       </div>
       <div class="meta">${studs.length} طالب${rangeLabel(g)}</div>
+      ${g.teacherName? `<div class="meta">👤 ${esc(g.teacherName)}</div>` : ''}
       <div class="bar-bg"><div class="bar-fg" style="width:${avgPct}%"></div></div>
       <div class="meta">متوسط الإنجاز ${avgPct}%</div>
     </div>`;
@@ -754,11 +774,10 @@ function groupDetailHTML(gid){
   return `
     <div class="breadcrumb"><span onclick="backToGroups()">المجموعات</span> ← ${esc(g.name)}</div>
     <div class="pagehead">
-      <div><h1>${esc(g.name)}</h1><p>${studs.length} طالب مسجّل بهذه المجموعة${rangeLabel(g)}</p></div>
+      <div><h1>${esc(g.name)}</h1><p>${studs.length} طالب مسجّل بهذه المجموعة${rangeLabel(g)}${g.teacherName? ' · المعلم/ة: '+esc(g.teacherName): ''}</p></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <button class="btn btn-ghost" onclick="openModal('editGroup','${gid}')">✎ تعديل الحدود</button>
         <button class="btn btn-ghost" onclick="openModal('addCycle','${gid}')">🏆 إضافة دورة أوائل</button>
-        <button class="btn btn-primary" onclick="openModal('addStudent','${gid}')">+ إضافة طالب</button>
       </div>
     </div>
 
@@ -796,6 +815,20 @@ function adminsPageHTML(){
    الكشف العام — سجل دائم لكل الطلاب (ذكور/إناث + بحث)
    --------------------------------------------------------- */
 function rosterPageHTML(){
+  return `
+    <div class="pagehead">
+      <div><h1>الكشف العام</h1><p>سجل دائم لكل الطلاب المنتسبين، حتى لو ما عاد منتسبين لأي مجموعة حاليًا</p></div>
+      <button class="btn btn-primary" onclick="openModal('addStudent')">+ إضافة طالب</button>
+    </div>
+    <div class="toolbar">
+      <button class="btn ${rosterGender==='m'?'btn-primary':'btn-ghost'} btn-sm" onclick="rosterGender='m';render();">👦 ذكور</button>
+      <button class="btn ${rosterGender==='f'?'btn-primary':'btn-ghost'} btn-sm" onclick="rosterGender='f';render();">👧 إناث</button>
+      <input type="search" placeholder="ابحث بالاسم الكامل..." value="${esc(rosterSearch)}" oninput="rosterSearch=this.value; refreshRosterList();" style="max-width:240px;">
+    </div>
+    <div id="rosterListWrap">${rosterListInnerHTML()}</div>
+  `;
+}
+function rosterListInnerHTML(){
   const filtered = STUDENTS
     .filter(s => (s.gender||'m')===rosterGender)
     .filter(s => !rosterSearch || (s.fullName||s.name||'').includes(rosterSearch))
@@ -818,13 +851,7 @@ function rosterPageHTML(){
   }).join('') || `<tr><td colspan="7" style="text-align:center;color:var(--ink-400);padding:24px;">لا يوجد طلاب بهذا التصنيف</td></tr>`;
 
   return `
-    <div class="pagehead"><div><h1>الكشف العام</h1><p>سجل دائم لكل الطلاب المنتسبين، حتى لو ما عاد منتسبين لأي مجموعة حاليًا</p></div></div>
-    <div class="toolbar">
-      <button class="btn ${rosterGender==='m'?'btn-primary':'btn-ghost'} btn-sm" onclick="rosterGender='m';render();">👦 ذكور</button>
-      <button class="btn ${rosterGender==='f'?'btn-primary':'btn-ghost'} btn-sm" onclick="rosterGender='f';render();">👧 إناث</button>
-      <input type="search" placeholder="ابحث بالاسم..." value="${esc(rosterSearch)}" oninput="rosterSearch=this.value; render();" style="max-width:240px;">
-      <span class="tag">${filtered.length} طالب</span>
-    </div>
+    <div class="tag" style="margin-bottom:10px;display:inline-block;">${filtered.length} طالب</div>
     <div class="card" style="padding:16px 18px;overflow-x:auto;">
       <table>
         <thead><tr><th>الاسم الرباعي</th><th>تاريخ الميلاد</th><th>تاريخ الانتساب</th><th>الهاتف</th><th>العنوان</th><th>المجموعة الحالية</th><th></th></tr></thead>
@@ -832,6 +859,10 @@ function rosterPageHTML(){
       </table>
     </div>
   `;
+}
+function refreshRosterList(){
+  const wrap = document.getElementById('rosterListWrap');
+  if(wrap) wrap.innerHTML = rosterListInnerHTML();
 }
 function unassignStudent(id,name){
   if(!confirm(`إزالة "${name}" من هذه المجموعة؟ بيضل موجود بالكشف العام ويقدر ينضم لمجموعة تانية لاحقًا.`)) return;
@@ -848,7 +879,7 @@ function trueDeleteStudent(id,name){
 function programsPageHTML(){
   const sorted = PROGRAMS.slice().sort((a,b)=> (b.year-a.year) || (b.startDate||'').localeCompare(a.startDate||''));
   const tiles = sorted.map(p=>{
-    const count = STUDENTS.filter(s=>s.programId===p.id).length;
+    const count = STUDENTS.filter(s=>studentInProgram(s,p.id)).length;
     return `<div class="card tile" onclick="openProgram('${p.id}')">
       <h3>${esc(programLabel(p))}</h3>
       <div class="meta">${esc(p.startDate||'—')} → ${esc(p.endDate||'—')}</div>
@@ -869,7 +900,7 @@ function programsPageHTML(){
 function programDetailHTML(id){
   const p = PROGRAMS.find(x=>x.id===id);
   if(!p){ currentProgramId=null; return programsPageHTML(); }
-  const studs = STUDENTS.filter(s=>s.programId===id).sort((a,b)=>(a.fullName||a.name||'').localeCompare((b.fullName||b.name||''),'ar'));
+  const studs = STUDENTS.filter(s=>studentInProgram(s,id)).sort((a,b)=>(a.fullName||a.name||'').localeCompare((b.fullName||b.name||''),'ar'));
   const rows = studs.map(s=>{
     const g = GROUPS.find(gr=>gr.id===s.groupId);
     return `<tr><td><b>${esc(s.fullName||s.name)}</b></td><td>${g?esc(g.name):'—'}</td><td style="direction:ltr;text-align:right;">${esc(s.phone||'—')}</td></tr>`;
@@ -945,40 +976,17 @@ let editingStudentId = null;
 let surahFilter = '';
 
 function openStudent(id){
-  editingStudentId = id; surahFilter='';
+  editingStudentId = id; surahFilter=''; currentAttendanceProgram = null;
   document.getElementById('modalOverlay').classList.remove('hidden');
   document.getElementById('modalBody').innerHTML = studentEditorHTML(id);
 }
+let currentAttendanceProgram = null;
 
 function studentEditorHTML(id){
   const st = STUDENTS.find(s=>s.id===id);
   if(!st) return '';
   const p = studentProgress(st);
-  const rows = SURAHS.filter(s=> !surahFilter || s.name.includes(surahFilter)).map(s=>{
-    const rec = (st.surahs && st.surahs[s.num]) || {status:'not_started', ayah:0, grade:''};
-    return `<tr class="surah-row">
-      <td class="snum">${s.num}</td>
-      <td>${s.name} <span class="mini-note">(${s.ayahs} آية)</span></td>
-      <td>
-        <select onchange="updateSurah('${id}',${s.num},'status',this.value)">
-          <option value="not_started" ${rec.status==='not_started'?'selected':''}>لم يبدأ</option>
-          <option value="in_progress" ${rec.status==='in_progress'?'selected':''}>قيد الحفظ</option>
-          <option value="memorized" ${rec.status==='memorized'?'selected':''}>محفوظة</option>
-        </select>
-      </td>
-      <td>
-        <input type="number" min="0" max="${s.ayahs}" value="${rec.ayah||0}" placeholder="الآية"
-          onchange="updateSurah('${id}',${s.num},'ayah',this.value)"
-          ${rec.status==='memorized'?'disabled':''}>
-      </td>
-      <td>
-        <select onchange="updateSurah('${id}',${s.num},'grade',this.value)">
-          <option value="">التقدير</option>
-          ${GRADES.map(g=>`<option value="${g}" ${rec.grade===g?'selected':''}>${g}</option>`).join('')}
-        </select>
-      </td>
-    </tr>`;
-  }).join('');
+  const myProgIds = studentProgramIds(st);
 
   return `
     <button class="close-x" onclick="closeModal()">✕</button>
@@ -1007,32 +1015,75 @@ function studentEditorHTML(id){
       <div class="field"><label>الصف الدراسي (رقم)</label><input type="number" value="${st.grade??''}" onchange="updateStudentField('${id}','grade',Number(this.value)||null);maybeReassignGroup('${id}')"></div>
       <div class="field"><label>العمر</label><input type="number" value="${st.age??''}" onchange="updateStudentField('${id}','age',Number(this.value)||null);maybeReassignGroup('${id}')"></div>
     </div>
-    <div class="row2" style="margin-bottom:14px;">
-      <div class="field"><label>المدرسة</label><input value="${esc(st.school||'')}" onchange="updateStudentField('${id}','school',this.value)"></div>
-      <div class="field"><label>البرنامج / الدورة</label>
-        <select onchange="updateStudentField('${id}','programId',this.value||null)">
-          <option value="">بدون تحديد</option>
-          ${PROGRAMS.map(pr=>`<option value="${pr.id}" ${st.programId===pr.id?'selected':''}>${esc(programLabel(pr))}</option>`).join('')}
-        </select>
-      </div>
-    </div>
+    <div class="field" style="margin-bottom:14px;"><label>المدرسة</label><input value="${esc(st.school||'')}" onchange="updateStudentField('${id}','school',this.value)"></div>
     <div class="field" style="margin-bottom:16px;"><label>المجموعة الحالية</label>
       <select onchange="updateStudentField('${id}','groupId',this.value||null)">
         <option value="">بدون مجموعة</option>
         ${GROUPS.map(gr=>`<option value="${gr.id}" ${st.groupId===gr.id?'selected':''}>${esc(gr.name)}</option>`).join('')}
       </select>
     </div>
-    <input type="search" class="surah-search" placeholder="ابحث عن سورة..." value="${esc(surahFilter)}" oninput="surahFilter=this.value; document.getElementById('modalBody').innerHTML=studentEditorHTML('${id}');">
-    <div style="max-height:360px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;">
+    <div class="field" style="margin-bottom:18px;"><label>البرامج / الدورات (يمكن اختيار أكثر من واحدة)</label>
+      <div style="max-height:130px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:10px 12px;">
+        ${PROGRAMS.map(pr=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:7px;font-size:14px;"><input type="checkbox" value="${pr.id}" ${myProgIds.includes(pr.id)?'checked':''} onchange="toggleStudentProgram('${id}','${pr.id}',this.checked)" style="width:auto;"> ${esc(programLabel(pr))}</label>`).join('') || '<span class="mini-note">لا توجد برامج مضافة بعد</span>'}
+      </div>
+    </div>
+
+    <h3 style="font-size:15px;color:var(--emerald-800);margin:20px 0 10px;">📅 الحضور والغياب</h3>
+    <div id="attendanceSection">${attendanceSectionHTML(id)}</div>
+
+    <h3 style="font-size:15px;color:var(--emerald-800);margin:22px 0 10px;">سجل الحفظ</h3>
+    <input type="search" class="surah-search" placeholder="ابحث عن اسم السورة كاملًا..." value="${esc(surahFilter)}" oninput="surahFilter=this.value; refreshSurahTable('${id}');">
+    <div id="surahTableWrap">${surahTableInnerHTML(id)}</div>
+    <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إغلاق</button></div>
+  `;
+}
+
+function surahTableInnerHTML(id){
+  const st = STUDENTS.find(s=>s.id===id);
+  if(!st) return '';
+  const rows = SURAHS.filter(s=> !surahFilter || s.name.includes(surahFilter)).map(s=>{
+    const rec = (st.surahs && st.surahs[s.num]) || {status:'not_started', ayah:0, grade:''};
+    return `<tr class="surah-row">
+      <td class="snum">${s.num}</td>
+      <td>${s.name} <span class="mini-note">(${s.ayahs} آية)</span></td>
+      <td>
+        <select onchange="updateSurah('${id}',${s.num},'status',this.value)">
+          <option value="not_started" ${rec.status==='not_started'?'selected':''}>لم يبدأ</option>
+          <option value="in_progress" ${rec.status==='in_progress'?'selected':''}>قيد الحفظ</option>
+          <option value="memorized" ${rec.status==='memorized'?'selected':''}>محفوظة</option>
+        </select>
+      </td>
+      <td>
+        <input type="number" min="0" max="${s.ayahs}" value="${rec.ayah||0}" placeholder="الآية"
+          onchange="updateSurah('${id}',${s.num},'ayah',this.value)"
+          ${rec.status==='memorized'?'disabled':''}>
+      </td>
+      <td>
+        <select onchange="updateSurah('${id}',${s.num},'grade',this.value)">
+          <option value="">التقدير</option>
+          ${GRADES.map(g=>`<option value="${g}" ${rec.grade===g?'selected':''}>${g}</option>`).join('')}
+        </select>
+      </td>
+    </tr>`;
+  }).join('');
+  return `
+    <div class="surah-scroll" style="max-height:360px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;">
       <table>
         <thead><tr><th></th><th>السورة</th><th>الحالة</th><th>وصل للآية</th><th>التقدير</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إغلاق</button></div>
   `;
 }
-
+function refreshSurahTable(id){
+  const wrap = document.getElementById('surahTableWrap');
+  if(!wrap) return;
+  const inner = wrap.querySelector('.surah-scroll');
+  const scrollTop = inner? inner.scrollTop : 0;
+  wrap.innerHTML = surahTableInnerHTML(id);
+  const inner2 = wrap.querySelector('.surah-scroll');
+  if(inner2) inner2.scrollTop = scrollTop;
+}
 function updateSurah(studentId, num, field, value){
   const st = STUDENTS.find(s=>s.id===studentId);
   const surahs = {...(st.surahs||{})};
@@ -1044,7 +1095,92 @@ function updateSurah(studentId, num, field, value){
   }
   surahs[num]=rec;
   db.collection('students').doc(studentId).update({surahs}).then(()=>{
-    if(editingStudentId===studentId) document.getElementById('modalBody').innerHTML = studentEditorHTML(studentId);
+    if(editingStudentId===studentId) refreshSurahTable(studentId);
+  });
+}
+function toggleStudentProgram(id, programId, checked){
+  const st = STUDENTS.find(s=>s.id===id);
+  if(!st) return;
+  const ids = new Set(studentProgramIds(st));
+  if(checked) ids.add(programId); else ids.delete(programId);
+  db.collection('students').doc(id).update({programIds: Array.from(ids)}).then(()=>{
+    toast('تم الحفظ');
+    if(editingStudentId===id){
+      const wrap = document.getElementById('attendanceSection');
+      if(wrap) wrap.innerHTML = attendanceSectionHTML(id);
+    }
+  });
+}
+
+/* ---------------------------------------------------------
+   الحضور والغياب — لكل طالب حسب كل برنامج منتسب له
+   --------------------------------------------------------- */
+function attendanceSectionHTML(id){
+  const st = STUDENTS.find(s=>s.id===id);
+  if(!st) return '';
+  const myProgIds = studentProgramIds(st);
+  const myPrograms = PROGRAMS.filter(pr=>myProgIds.includes(pr.id));
+  if(!myPrograms.length) return `<p class="mini-note">الطالب غير منتسب لأي برنامج/دورة بعد — أضِفه لبرنامج من الأعلى أولًا.</p>`;
+  if(!currentAttendanceProgram || !myProgIds.includes(currentAttendanceProgram)) currentAttendanceProgram = myPrograms[0].id;
+  return `
+    <div class="field" style="max-width:320px;margin-bottom:10px;">
+      <select onchange="currentAttendanceProgram=this.value; refreshAttendanceTable('${id}');">
+        ${myPrograms.map(pr=>`<option value="${pr.id}" ${pr.id===currentAttendanceProgram?'selected':''}>${esc(programLabel(pr))}</option>`).join('')}
+      </select>
+    </div>
+    <div id="attendanceTableWrap">${attendanceTableInnerHTML(id, currentAttendanceProgram)}</div>
+  `;
+}
+function attendanceTableInnerHTML(id, programId){
+  const p = PROGRAMS.find(x=>x.id===programId);
+  if(!p) return '';
+  const dates = programSessionDates(p);
+  if(!dates.length) return `<p class="mini-note">حدّد تاريخ البداية والنهاية لهذا البرنامج من تبويب "البرامج والدورات" ليظهر جدول الأيام هون.</p>`;
+  const st = STUDENTS.find(s=>s.id===id);
+  const att = (st.attendance && st.attendance[programId]) || {};
+  const dayNames = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+  const rows = dates.map(d=>{
+    const rec = att[d] || {status:'', signature:'', notes:''};
+    const dayName = dayNames[new Date(d+'T00:00:00').getDay()];
+    return `<tr>
+      <td>${d}<div class="mini-note">${dayName}</div></td>
+      <td>
+        <select onchange="updateAttendance('${id}','${programId}','${d}','status',this.value)">
+          <option value="">—</option>
+          <option value="present" ${rec.status==='present'?'selected':''}>حاضر</option>
+          <option value="absent" ${rec.status==='absent'?'selected':''}>غائب</option>
+        </select>
+      </td>
+      <td><input value="${esc(rec.signature||'')}" placeholder="توقيع المعلم" onchange="updateAttendance('${id}','${programId}','${d}','signature',this.value)"></td>
+      <td><input value="${esc(rec.notes||'')}" placeholder="ملاحظات" onchange="updateAttendance('${id}','${programId}','${d}','notes',this.value)"></td>
+    </tr>`;
+  }).join('');
+  return `
+    <div class="att-scroll" style="max-height:300px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;">
+      <table>
+        <thead><tr><th>التاريخ</th><th>الحضور</th><th>توقيع المعلم</th><th>ملاحظات</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+function refreshAttendanceTable(id){
+  const wrap = document.getElementById('attendanceTableWrap');
+  if(!wrap) return;
+  const inner = wrap.querySelector('.att-scroll');
+  const scrollTop = inner? inner.scrollTop : 0;
+  wrap.innerHTML = attendanceTableInnerHTML(id, currentAttendanceProgram);
+  const inner2 = wrap.querySelector('.att-scroll');
+  if(inner2) inner2.scrollTop = scrollTop;
+}
+function updateAttendance(id, programId, date, field, value){
+  const st = STUDENTS.find(s=>s.id===id);
+  if(!st) return;
+  const attendance = {...(st.attendance||{})};
+  attendance[programId] = {...(attendance[programId]||{})};
+  attendance[programId][date] = {...(attendance[programId][date]||{status:'',signature:'',notes:''}), [field]:value};
+  db.collection('students').doc(id).update({attendance}).then(()=>{
+    if(editingStudentId===id) refreshAttendanceTable(id);
   });
 }
 function updateStudentField(id,field,value){
@@ -1072,6 +1208,7 @@ function openModal(kind, arg){
       <button class="close-x" onclick="closeModal()">✕</button>
       <h2>إضافة مجموعة جديدة</h2>
       <div class="field"><label>اسم المجموعة</label><input id="ngName" placeholder="مثال: مجموعة الأشبال"></div>
+      <div class="field"><label>اسم الشيخ / المعلم أو المعلمة</label><input id="ngTeacher" placeholder="مثال: الشيخ أحمد"></div>
       <p class="mini-note" style="margin-bottom:10px;">حدّد نطاق العمر و/أو الصف المسموح لهذه المجموعة (اختياري) — بيُستخدم للنقل التلقائي لاحقًا.</p>
       <div class="row2">
         <div class="field"><label>أقل عمر</label><input type="number" id="ngAgeMin" placeholder="مثال: 7"></div>
@@ -1091,6 +1228,7 @@ function openModal(kind, arg){
       <button class="close-x" onclick="closeModal()">✕</button>
       <h2>تعديل حدود المجموعة</h2>
       <div class="field"><label>اسم المجموعة</label><input id="egName" value="${esc(g.name)}"></div>
+      <div class="field"><label>اسم الشيخ / المعلم أو المعلمة</label><input id="egTeacher" value="${esc(g.teacherName||'')}"></div>
       <div class="row2">
         <div class="field"><label>أقل عمر</label><input type="number" id="egAgeMin" value="${g.ageMin??''}"></div>
         <div class="field"><label>أكبر عمر</label><input type="number" id="egAgeMax" value="${g.ageMax??''}"></div>
@@ -1127,7 +1265,8 @@ function openModal(kind, arg){
       <button class="btn btn-primary" onclick="submitAnnouncement()">نشر</button></div>`;
   }
   if(kind==='addStudent'){
-    const progOpts = PROGRAMS.map(p=>`<option value="${p.id}">${esc(programLabel(p))}</option>`).join('');
+    const progChecks = PROGRAMS.map(p=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:7px;font-size:14px;"><input type="checkbox" class="nsProgramChk" value="${p.id}" style="width:auto;"> ${esc(programLabel(p))}</label>`).join('') || '<span class="mini-note">لا توجد برامج مضافة بعد (يمكنك إضافتها لاحقًا من تبويب البرامج والدورات)</span>';
+    const groupOpts = GROUPS.map(g=>`<option value="${g.id}" ${arg===g.id?'selected':''}>${esc(g.name)}</option>`).join('');
     body.innerHTML = `
       <button class="close-x" onclick="closeModal()">✕</button>
       <h2>إضافة طالب جديد</h2>
@@ -1145,12 +1284,12 @@ function openModal(kind, arg){
         <div class="field"><label>الصف الدراسي (رقم)</label><input type="number" id="nsGrade" placeholder="مثال: 3"></div>
         <div class="field"><label>العمر</label><input type="number" id="nsAge" placeholder="مثال: 9"></div>
       </div>
-      <div class="row2">
-        <div class="field"><label>المدرسة</label><input id="nsSchool"></div>
-        <div class="field"><label>البرنامج / الدورة</label><select id="nsProgram"><option value="">بدون تحديد</option>${progOpts}</select></div>
+      <div class="field"><label>المدرسة</label><input id="nsSchool"></div>
+      <div class="field"><label>المجموعة (اختياري)</label><select id="nsGroupSelect"><option value="">بدون مجموعة الآن</option>${groupOpts}</select></div>
+      <div class="field"><label>البرامج / الدورات (يمكن اختيار أكثر من واحدة)</label>
+        <div style="max-height:150px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:10px 12px;">${progChecks}</div>
       </div>
       <div class="field"><label>كلمة السر الخاصة بالطالب (تُعطى لولي الأمر)</label><input id="nsPass" style="direction:ltr;text-align:left;" placeholder="مثال: k7x92"></div>
-      <input type="hidden" id="nsGroup" value="${arg}">
       <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button>
       <button class="btn btn-primary" onclick="submitStudent()">إضافة</button></div>`;
   }
@@ -1185,12 +1324,13 @@ function closeModal(){
 function submitGroup(){
   const name = document.getElementById('ngName').value.trim();
   if(!name) return toast('اكتب اسم المجموعة');
+  const teacherName = document.getElementById('ngTeacher').value.trim();
   const ageMin = document.getElementById('ngAgeMin').value;
   const ageMax = document.getElementById('ngAgeMax').value;
   const gradeMin = document.getElementById('ngGradeMin').value;
   const gradeMax = document.getElementById('ngGradeMax').value;
   db.collection('groups').add({
-    name, createdAt: Date.now(),
+    name, teacherName, createdAt: Date.now(),
     ageMin: ageMin? Number(ageMin): null, ageMax: ageMax? Number(ageMax): null,
     gradeMin: gradeMin? Number(gradeMin): null, gradeMax: gradeMax? Number(gradeMax): null
   }).then(()=>{closeModal();toast('تمت الإضافة');});
@@ -1198,7 +1338,7 @@ function submitGroup(){
 function submitStudent(){
   const fullName = document.getElementById('nsFullName').value.trim();
   const pass = document.getElementById('nsPass').value.trim();
-  const groupId = document.getElementById('nsGroup').value;
+  const groupId = document.getElementById('nsGroupSelect').value || null;
   if(!fullName || !pass) return toast('عبّي الاسم الرباعي وكلمة السر على الأقل');
   const gender = document.getElementById('nsGender').value;
   const dob = document.getElementById('nsDob').value;
@@ -1208,23 +1348,24 @@ function submitStudent(){
   const gradeV = document.getElementById('nsGrade').value;
   const ageV = document.getElementById('nsAge').value;
   const school = document.getElementById('nsSchool').value.trim();
-  const programId = document.getElementById('nsProgram').value;
+  const programIds = Array.from(document.querySelectorAll('.nsProgramChk:checked')).map(c=>c.value);
   db.collection('students').add({
     name: fullName, fullName, gender, dob, phone, joinDate, address,
     grade: gradeV? Number(gradeV): null, age: ageV? Number(ageV): null, school,
-    programId: programId||null, password:pass, groupId, surahs:{}
+    programIds, password:pass, groupId, surahs:{}, attendance:{}
   }).then(()=>{closeModal();toast('تمت إضافة الطالب');});
 }
 function submitEditGroup(){
   const id = document.getElementById('egId').value;
   const name = document.getElementById('egName').value.trim();
+  const teacherName = document.getElementById('egTeacher').value.trim();
   const ageMin = document.getElementById('egAgeMin').value;
   const ageMax = document.getElementById('egAgeMax').value;
   const gradeMin = document.getElementById('egGradeMin').value;
   const gradeMax = document.getElementById('egGradeMax').value;
   if(!name) return toast('اكتب اسم المجموعة');
   db.collection('groups').doc(id).update({
-    name,
+    name, teacherName,
     ageMin: ageMin? Number(ageMin): null, ageMax: ageMax? Number(ageMax): null,
     gradeMin: gradeMin? Number(gradeMin): null, gradeMax: gradeMax? Number(gradeMax): null
   }).then(()=>{closeModal();toast('تم الحفظ');});
