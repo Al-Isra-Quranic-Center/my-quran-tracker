@@ -664,6 +664,13 @@ function programLabel(p){ return `${p.type} ${p.year}`; }
 /* يدعم الحقل الجديد (مصفوفة programIds) والحقل القديم (programId مفرد) معًا لعدم فقدان أي بيانات سابقة */
 function studentProgramIds(s){ return s.programIds || (s.programId? [s.programId]: []); }
 function studentInProgram(s,pid){ return studentProgramIds(s).includes(pid); }
+/* تنسيق تاريخ محلي (بدون تحويل UTC) لتفادي انزياح يوم واحد لأي توقيت شرق غرينتش */
+function fmtLocalDate(d){
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
 /* يولّد تواريخ أيام الدوام لبرنامج معيّن حسب نوعه ومدته: الدائم = كل سبت، الشتوي/الصيفي = سبت واثنين وأربعاء */
 function programSessionDates(p){
   if(!p || !p.startDate || !p.endDate) return [];
@@ -674,7 +681,7 @@ function programSessionDates(p){
   const end = new Date(p.endDate+'T00:00:00');
   let guard=0;
   while(d<=end && guard<2000){
-    if(allowedDays.includes(d.getDay())) dates.push(d.toISOString().slice(0,10));
+    if(allowedDays.includes(d.getDay())) dates.push(fmtLocalDate(d));
     d.setDate(d.getDate()+1);
     guard++;
   }
@@ -1424,6 +1431,33 @@ function renderStudentView(){
       <div class="mini-note" style="margin-top:5px;">${esc(a.date||'')}</div>
     </div>`).join('');
 
+  /* الحضور والغياب واسم المعلم يظهروا بس إذا الطالب منتسب حاليًا لمجموعة — إذا انسحب، بتختفي هون بس بتضل محفوظة عند المسؤول */
+  let attendanceViewHTML = '';
+  if(group){
+    const myProgIds = studentProgramIds(st);
+    const myPrograms = PROGRAMS.filter(pr=>myProgIds.includes(pr.id));
+    const dayNames = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+    attendanceViewHTML = myPrograms.map(pr=>{
+      const dates = programSessionDates(pr);
+      const att = (st.attendance && st.attendance[pr.id]) || {};
+      const rows = dates.map(d=>{
+        const rec = att[d] || {status:'', signature:'', notes:''};
+        const dayName = dayNames[new Date(d+'T00:00:00').getDay()];
+        const pill = rec.status==='present'
+          ? '<span class="status-pill status-done">حاضر ✓</span>'
+          : rec.status==='absent'
+            ? '<span class="status-pill" style="background:#fbe4e2;color:var(--red-600);">غائب</span>'
+            : '<span class="status-pill status-not">—</span>';
+        return `<tr><td>${d}<div class="mini-note">${dayName}</div></td><td>${pill}</td><td>${esc(rec.signature||'—')}</td><td>${esc(rec.notes||'—')}</td></tr>`;
+      }).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--ink-400);padding:14px;">لسا ما تحدد تاريخ لهذه الدورة</td></tr>`;
+      return `
+        <h3 style="font-size:14.5px;color:var(--emerald-800);margin:14px 0 8px;">${esc(programLabel(pr))}</h3>
+        <div class="card" style="padding:12px 14px;overflow-x:auto;margin-bottom:12px;">
+          <table><thead><tr><th>التاريخ</th><th>الحضور</th><th>توقيع المعلم</th><th>ملاحظات</th></tr></thead><tbody>${rows}</tbody></table>
+        </div>`;
+    }).join('');
+  }
+
   const rows = SURAHS.map(s=>{
     const rec = (st.surahs && st.surahs[s.num]) || {status:'not_started', ayah:0, grade:''};
     const pillClass = rec.status==='memorized'?'status-done':rec.status==='in_progress'?'status-progress':'status-not';
@@ -1448,7 +1482,7 @@ function renderStudentView(){
     <div class="readonly-header">
       <div>
         <h1>${esc(st.fullName||st.name)}</h1>
-        <p>${group? esc(group.name):'—'} · منضم منذ ${esc(st.joinDate||'')}${SETTINGS.location? ' · 📍 '+esc(SETTINGS.location):''}</p>
+        <p>${group? esc(group.name):'—'}${group && group.teacherName? ' · المعلم/ة: '+esc(group.teacherName):''} · منضم منذ ${esc(st.joinDate||'')}${SETTINGS.location? ' · 📍 '+esc(SETTINGS.location):''}</p>
       </div>
       <div class="ring-wrap">
         <div class="ring" style="--pct:${p.pct}"><div class="inner">${p.pct}%</div></div>
@@ -1458,6 +1492,8 @@ function renderStudentView(){
         </div>
       </div>
     </div>
+
+    ${attendanceViewHTML? `<h2 class="serif" style="font-size:17px;color:var(--emerald-800);">📅 الحضور والغياب</h2>${attendanceViewHTML}` : ''}
 
     ${annHTML? `<h2 class="serif" style="font-size:17px;color:var(--emerald-800);">📢 إعلانات المركز</h2>${annHTML}` : ''}
 
