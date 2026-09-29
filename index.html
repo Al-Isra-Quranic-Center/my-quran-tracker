@@ -474,7 +474,8 @@ let unsubHonor=null, unsubTajLevels=null, unsubTajLessons=null, unsubFinals=null
 let HONOR=[], TAJ_LEVELS=[], TAJ_LESSONS=[], FINALS=[], PRESENCE={};
 let dataVer = 0;
 let addStudentTajweed = false;
-let programView = null;   // null | 'final'
+let groupFinalView = false;
+let groupFinalProgramId = null;
 let dailyProgramId = null, dailyDate = null;
 let histMode='student', histStudentQ='', histStudentId='', histSurah='', histProgram='';
 let tajLevelId = null, tajSearch = '', tajAddSearch = '';
@@ -663,7 +664,7 @@ function logout(msg){
   }
   stopPresence();
   sessionStorage.removeItem('isra_session');
-  session=null; currentGroupId=null; currentProgramId=null; programView=null;
+  session=null; currentGroupId=null; currentProgramId=null; groupFinalView=false; groupFinalProgramId=null;
   document.getElementById('app').classList.remove('show');
   document.getElementById('loginScreen').classList.remove('hidden');
   document.getElementById('loginPass').value='';
@@ -786,11 +787,11 @@ function renderAdmin(){
   `;
   const main = document.getElementById('mainArea');
   if(activeTab==='groups'){
-    main.innerHTML = currentGroupId ? groupDetailHTML(currentGroupId) : groupsListHTML();
+    main.innerHTML = currentGroupId ? (groupFinalView ? finalSheetHTML(groupFinalProgramId, currentGroupId) : groupDetailHTML(currentGroupId)) : groupsListHTML();
   } else if(activeTab==='roster'){
     main.innerHTML = rosterPageHTML();
   } else if(activeTab==='programs'){
-    main.innerHTML = currentProgramId ? (programView==='final' ? finalSheetHTML(currentProgramId) : programDetailHTML(currentProgramId)) : programsPageHTML();
+    main.innerHTML = currentProgramId ? programDetailHTML(currentProgramId) : programsPageHTML();
   } else if(activeTab==='tajweed'){
     main.innerHTML = tajweedPageHTML();
   } else if(activeTab==='honor'){
@@ -805,10 +806,10 @@ function renderAdmin(){
     main.innerHTML = adminsPageHTML();
   }
 }
-function setTab(t){ activeTab=t; currentGroupId=null; currentProgramId=null; programView=null; render(); }
-function openGroup(id){ currentGroupId=id; groupSearch=''; dailyProgramId=null; dailyDate=null; render(); }
+function setTab(t){ activeTab=t; currentGroupId=null; currentProgramId=null; groupFinalView=false; groupFinalProgramId=null; render(); }
+function openGroup(id){ currentGroupId=id; groupSearch=''; dailyProgramId=null; dailyDate=null; groupFinalView=false; groupFinalProgramId=null; render(); }
 function backToGroups(){ currentGroupId=null; render(); }
-function openProgram(id){ currentProgramId=id; programView=null; render(); }
+function openProgram(id){ currentProgramId=id; render(); }
 function programLabel(p){
   if(p.yearFrom && p.yearTo) return `${p.type} ${p.yearFrom}-${p.yearTo}`;
   return `${p.type} ${p.year}`;
@@ -933,9 +934,33 @@ function groupDetailHTML(gid){
 
     ${dailyTableSectionHTML(gid)}
 
+    ${finalSheetSectionHTML(gid)}
+
     <h2 class="serif" style="font-size:17px;color:var(--emerald-800);margin-top:26px;">🏆 الأوائل الثلاث</h2>
     ${podium}
   `;
+}
+
+/* ---------------------------------------------------------
+   كشف التسميع النهائي — خاص بكل مجموعة (كل دورة/نادي بيصير إله كشف منفصل لكل مجموعة فيه)
+   --------------------------------------------------------- */
+function groupProgramOptions(gid){
+  const studs = STUDENTS.filter(s=>s.groupId===gid);
+  return PROGRAMS.filter(p=>studs.some(s=>studentInProgram(s,p.id)))
+    .sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));
+}
+function finalSheetSectionHTML(gid){
+  const head = `<h2 class="section-title" style="margin-top:26px;">📝 كشف التسميع النهائي (خاص بهذه المجموعة)</h2>`;
+  const opts = groupProgramOptions(gid);
+  if(!opts.length) return head + `<p class="mini-note">لا يوجد طلاب من هذه المجموعة منتسبين لأي دورة/نادي بعد. أضف انتساب الطلاب لدورة من سجل كل طالب أولًا.</p>`;
+  if(!groupFinalProgramId || !opts.find(p=>p.id===groupFinalProgramId)) groupFinalProgramId = opts[0].id;
+  const progOpts = opts.map(p=>`<option value="${p.id}" ${p.id===groupFinalProgramId?'selected':''}>${esc(programLabel(p))}</option>`).join('');
+  return head + `
+    <div class="toolbar">
+      <select style="width:auto;min-width:220px;" onchange="groupFinalProgramId=this.value;render();">${progOpts}</select>
+      <button class="btn btn-primary btn-sm" onclick="groupFinalView=true;render();">📝 فتح كشف التسميع النهائي لهذه المجموعة</button>
+    </div>
+    <p class="mini-note">كل دورة/نادي إله كشف تسميع نهائي منفصل خاص بكل مجموعة — حتى لو نفس الدورة فيها أكثر من مجموعة.</p>`;
 }
 function groupStudentTableInnerHTML(gid){
   const studs = STUDENTS.filter(s=>s.groupId===gid)
@@ -1038,19 +1063,19 @@ function adminsPageHTML(){
             : (isMainRow ? '<span class="mini-note">كل الصلاحيات</span>' : (a.canViewCreds===true?'<span class="tag">يشوف بيانات الدخول</span>':'<span class="mini-note">بدون بيانات الدخول</span>'))}</td>
       <td style="white-space:nowrap;">
         ${canEditThis? `<button class="btn btn-ghost btn-sm" onclick="openModal('editAdminCreds','${a.id}')">تغيير الاسم/كلمة السر</button>` : ''}
-        ${!isMainRow && !isMe? `<button class="btn btn-danger btn-sm" onclick="deleteAdmin('${a.id}','${esc(a.name)}')">إزالة</button>` : ''}
+        ${seeAll && !isMainRow && !isMe? `<button class="btn btn-danger btn-sm" onclick="deleteAdmin('${a.id}','${esc(a.name)}')">إزالة</button>` : ''}
       </td>
     </tr>`;
   }).join('');
   return `
     <div class="pagehead">
-      <div><h1>المسؤولون</h1><p>كل مسؤول له اسم مستخدم وكلمة سر خاصة. المشرف الرئيسي يحدد مين يقدر يشوف ويغيّر بيانات الدخول للمسؤولين.</p></div>
-      <button class="btn btn-primary" onclick="openModal('addAdmin')">+ إضافة مسؤول</button>
+      <div><h1>المسؤولون</h1><p>كل مسؤول له اسم مستخدم وكلمة سر خاصة. المشرف الرئيسي يحدد مين يقدر يشوف ويغيّر بيانات الدخول للمسؤولين — ونفس هذه الصلاحية هي يلي بتسمح بإضافة أو إزالة مسؤولين.</p></div>
+      ${seeAll? `<button class="btn btn-primary" onclick="openModal('addAdmin')">+ إضافة مسؤول</button>` : ''}
     </div>
     <div class="card" style="padding:16px 18px;overflow-x:auto;">
       <table><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>كلمة السر</th><th>الحالة</th><th>صلاحية بيانات الدخول</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     </div>
-    <p class="mini-note" style="margin-top:10px;">المسؤول اللي ما عنده صلاحية بيانات الدخول بيقدر يعدّل كل شي بالنظام ما عدا رؤية/تغيير أسماء المستخدمين وكلمات السر لباقي المسؤولين (وبيقدر يغيّر حسابه هو).</p>
+    <p class="mini-note" style="margin-top:10px;">المسؤول اللي ما عنده صلاحية بيانات الدخول بيقدر يعدّل كل شي بالنظام ما عدا: رؤية/تغيير أسماء المستخدمين وكلمات السر لباقي المسؤولين، وإضافة أو إزالة أي مسؤول (وبيقدر يغيّر حسابه هو بس).</p>
   `;
 }
 function setAdminCredPerm(id, val){
@@ -1165,14 +1190,14 @@ function programDetailHTML(id){
   return `
     <div class="breadcrumb"><span onclick="currentProgramId=null;render();">البرامج والدورات</span> ← ${esc(programLabel(p))}</div>
     <div class="pagehead">
-      <div><h1>${esc(programLabel(p))} ${p.finalized?'<span class="tag" style="background:#e4efe8;color:var(--emerald-700);">✔ منتهية</span>':''}</h1><p>من ${esc(p.startDate||'—')} إلى ${esc(p.endDate||'—')} · أيام الدوام: ${isWinterSummer(p)?'السبت والاثنين والأربعاء':'السبت'}</p></div>
+      <div><h1>${esc(programLabel(p))}</h1><p>من ${esc(p.startDate||'—')} إلى ${esc(p.endDate||'—')} · أيام الدوام: ${isWinterSummer(p)?'السبت والاثنين والأربعاء':'السبت'}</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn btn-ghost" onclick="openModal('editProgram','${id}')">✎ تعديل</button>
-        <button class="btn btn-primary" onclick="programView='final';render();">📝 كشف التسميع النهائي</button>
         <button class="btn btn-ghost" onclick="openReportModal('programSummary',{pid:'${id}'})">🖨️ طباعة / تصدير</button>
         <button class="btn btn-danger" onclick="deleteProgram('${id}')">حذف البرنامج</button>
       </div>
     </div>
+    <p class="mini-note" style="margin-bottom:12px;">كشف التسميع النهائي صار خاص بكل مجموعة على حدة — افتحه من داخل صفحة كل مجموعة.</p>
     <div class="card" style="padding:16px 18px;overflow-x:auto;">
       <table><thead><tr><th>الطالب</th><th>المجموعة</th><th>الهاتف</th><th>ما حفظه في هذه الدورة</th></tr></thead><tbody>${rows}</tbody></table>
     </div>
@@ -1538,6 +1563,7 @@ function updateStudentField(id,field,value){
   toast('تم الحفظ');
 }
 function deleteAdmin(id,name){
+  if(!canSeeCreds()){ toast('ما عندك صلاحية إزالة مسؤولين'); return; }
   if(id===mainAdminId()){ toast('لا يمكن حذف المشرف الرئيسي'); return; }
   if(id===session.id){ toast('لا يمكنك حذف حسابك وأنت داخل به'); return; }
   if(ADMINS.length<=1){ toast('لازم يبقى مسؤول واحد على الأقل'); return; }
@@ -1633,7 +1659,8 @@ function openModal(kind, arg){
       <button class="btn btn-primary" onclick="submitEditProgram()">حفظ</button></div>`;
   }
   if(kind==='finalSettings'){
-    const sh = getFinalSheet(arg); const s = sh.settings;
+    const [fsPid, fsGid] = arg.split('|');
+    const sh = getFinalSheet(fsPid, fsGid); const s = sh.settings;
     const f = (id,label,val,step)=>`<div class="field"><label>${label}</label><input type="number" step="${step||'any'}" id="fs_${id}" value="${val}"></div>`;
     body.innerHTML = `
       <button class="close-x" onclick="closeModal()">✕</button>
@@ -1645,7 +1672,7 @@ function openModal(kind, arg){
       <div class="row2">${f('maxAtt','الحضور (من)',s.maxAtt)}${f('absCost','خصم كل غياب',s.absCost)}</div>
       <div class="row2">${f('maxPrayer','الصلاة والسلوك (من)',s.maxPrayer)}${f('pageMult','معامل عدد الصفحات (×)',s.pageMult)}</div>
       ${f('honorPct','حدّ «تميّز» (نسبة من علامة الأول %)',s.honorPct)}
-      <input type="hidden" id="fs_pid" value="${arg}">
+      <input type="hidden" id="fs_key" value="${arg}">
       <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button>
       <button class="btn btn-primary" onclick="submitFinalSettings()">حفظ</button></div>`;
   }
@@ -1808,6 +1835,7 @@ function submitAnnouncement(){
     .then(()=>{closeModal();toast('تم النشر');});
 }
 function submitAdmin(){
+  if(!canSeeCreds()){ toast('ما عندك صلاحية إضافة مسؤولين'); return; }
   const name = document.getElementById('naName').value.trim();
   const username = document.getElementById('naUser').value.trim();
   const pass = document.getElementById('naPass').value.trim();
@@ -1957,14 +1985,24 @@ function renderStudentView(){
 function defaultFinalSettings(){
   return {maxFJ:20, maxKT:10, wFath:2, wJali:1, wKhafi:0.25, wTanbih:0.25, maxAtt:20, absCost:0.5, maxPrayer:10, pageMult:2, honorPct:85};
 }
-function getFinalSheet(pid){
-  const sh = FINALS.find(f=>f.id===pid) || {};
-  return {
-    id: pid,
-    committee: (sh.committee && sh.committee.length? sh.committee : ['','','']).concat(['','','']).slice(0,3),
-    settings: {...defaultFinalSettings(), ...(sh.settings||{})},
-    rows: sh.rows || {}
-  };
+/* معرّف كشف التسميع الآن مركّب من (الدورة + المجموعة) — كل مجموعة إلها كشف مستقل حتى ضمن نفس الدورة */
+function finalSheetDocId(pid, gid){ return pid + '__' + gid; }
+function normCommittee(cm){ return (cm && cm.length? cm : ['','','']).concat(['','','']).slice(0,3); }
+function getFinalSheet(pid, gid){
+  const compId = finalSheetDocId(pid, gid);
+  const comp = FINALS.find(f=>f.id===compId);
+  if(comp){
+    return { id:compId, pid, gid, committee: normCommittee(comp.committee), settings:{...defaultFinalSettings(), ...(comp.settings||{})}, rows: comp.rows||{}, finalized: comp.finalized===true, finalizedAt: comp.finalizedAt||null };
+  }
+  /* توافق مع بيانات قديمة كانت مخزّنة قبل هذا التحديث تحت معرّف الدورة وحدها (بدون حذفها) — تُعرض هون فقط لطلاب هذه المجموعة تحديدًا */
+  const legacy = FINALS.find(f=>f.id===pid);
+  if(legacy){
+    const gset = new Set(STUDENTS.filter(s=>s.groupId===gid).map(s=>s.id));
+    const rows = {};
+    Object.keys(legacy.rows||{}).forEach(sid=>{ if(gset.has(sid)) rows[sid] = legacy.rows[sid]; });
+    return { id:compId, pid, gid, committee: normCommittee(legacy.committee), settings:{...defaultFinalSettings(), ...(legacy.settings||{})}, rows, finalized:false, finalizedAt:null, legacySource:pid };
+  }
+  return { id:compId, pid, gid, committee:['','',''], settings: defaultFinalSettings(), rows:{}, finalized:false, finalizedAt:null };
 }
 function countAbsences(st, pid){
   const att = (st.attendance||{})[pid] || {};
@@ -2003,35 +2041,37 @@ function rankFinal(items, s){
   });
   return out;
 }
-function finalSheetData(pid){
+function finalSheetData(pid, gid){
   const p = PROGRAMS.find(x=>x.id===pid);
-  const sh = getFinalSheet(pid);
-  const studs = STUDENTS.filter(s=>studentInProgram(s,pid)).sort(byName);
+  const g = GROUPS.find(x=>x.id===gid);
+  const sh = getFinalSheet(pid, gid);
+  const studs = STUDENTS.filter(s=>s.groupId===gid && studentInProgram(s,pid)).sort(byName);
   const rows = studs.map(s=>{
     const row = sh.rows[s.id] || {};
     const calc = computeFinalRow(row, sh.settings, countAbsences(s,pid));
     return {s, row, calc, done: row.done===true};
   });
   const ranks = rankFinal(rows.filter(r=>r.done).map(r=>({id:r.s.id,total:r.calc.total})), sh.settings);
-  return {p, sh, rows, ranks};
+  return {p, g, sh, rows, ranks};
 }
-function finalSheetHTML(pid){
-  const d = finalSheetData(pid);
-  if(!d.p){ programView=null; return programsPageHTML(); }
-  const {p, sh, rows, ranks} = d;
-  const inp = (sid,field,val,w)=>`<input data-fk="f:${sid}:${field}" type="number" step="any" class="mini-input" style="width:${w||52}px;" value="${val===undefined||val===null?'':val}" onchange="saveFinalRow('${pid}','${sid}','${field}',this.value)">`;
+function finalSheetHTML(pid, gid){
+  const d = finalSheetData(pid, gid);
+  if(!d.p || !d.g){ groupFinalView=false; return groupDetailHTML(gid); }
+  const {p, g, sh, rows, ranks} = d;
+  const key = pid+'|'+gid;
+  const inp = (sid,field,val,w)=>`<input data-fk="f:${sid}:${field}" type="number" step="any" class="mini-input" style="width:${w||52}px;" value="${val===undefined||val===null?'':val}" onchange="saveFinalRow('${pid}','${gid}','${sid}','${field}',this.value)">`;
   const bodyRows = rows.map(r=>{
     const sid = r.s.id, row = r.row, sec = row.sec||[];
     const secCells = [0,1,2,3].map(k=>{
       const q = sec[k]||{};
-      return ['f','j','x','t'].map(m=>`<td>${`<input data-fk="f:${sid}:s${k}${m}" type="number" step="any" min="0" class="mini-input" style="width:42px;" value="${q[m]===undefined||q[m]===null?'':q[m]}" onchange="saveFinalSec('${pid}','${sid}',${k},'${m}',this.value)">`}</td>`).join('');
+      return ['f','j','x','t'].map(m=>`<td>${`<input data-fk="f:${sid}:s${k}${m}" type="number" step="any" min="0" class="mini-input" style="width:42px;" value="${q[m]===undefined||q[m]===null?'':q[m]}" onchange="saveFinalSec('${pid}','${gid}','${sid}',${k},'${m}',this.value)">`}</td>`).join('');
     }).join('');
     const rk = ranks[sid];
     const totalTxt = r.done ? `<b>${r.calc.total}</b>` : '<span class="mini-note">—</span>';
     const rankTxt = r.done && rk ? `<b>${rk.label}</b>` : '<span class="mini-note">—</span>';
     return `<tr>
       <td style="white-space:nowrap;"><b>${esc(r.s.fullName||r.s.name)}</b></td>
-      <td><input data-fk="f:${sid}:portion" class="mini-input" style="min-width:130px;" value="${esc(row.portion||autoPortion(r.s,pid))}" placeholder="الجزء/السور" onchange="saveFinalRow('${pid}','${sid}','portion',this.value)"></td>
+      <td><input data-fk="f:${sid}:portion" class="mini-input" style="min-width:130px;" value="${esc(row.portion||autoPortion(r.s,pid))}" placeholder="الجزء/السور" onchange="saveFinalRow('${pid}','${gid}','${sid}','portion',this.value)"></td>
       <td>${inp(sid,'pages',row.pages,54)}</td>
       ${secCells}
       <td>${r.calc.fj}</td><td>${r.calc.kt}</td>
@@ -2040,26 +2080,26 @@ function finalSheetHTML(pid){
       <td>${r.calc.pagesMarks}</td>
       <td>${totalTxt}</td>
       <td>${rankTxt}</td>
-      <td style="text-align:center;"><input data-fk="f:${sid}:done" type="checkbox" style="width:auto;" ${r.done?'checked':''} onchange="saveFinalRow('${pid}','${sid}','done',this.checked)" title="تم تسميعه — يدخل بالترتيب"></td>
+      <td style="text-align:center;"><input data-fk="f:${sid}:done" type="checkbox" style="width:auto;" ${r.done?'checked':''} onchange="saveFinalRow('${pid}','${gid}','${sid}','done',this.checked)" title="تم تسميعه — يدخل بالترتيب"></td>
     </tr>`;
-  }).join('') || `<tr><td colspan="30" style="text-align:center;color:var(--ink-400);padding:22px;">لا يوجد طلاب مسجّلين بهذه الدورة. أضفهم للدورة من سجل الطالب.</td></tr>`;
+  }).join('') || `<tr><td colspan="30" style="text-align:center;color:var(--ink-400);padding:22px;">لا يوجد طلاب من هذه المجموعة منتسبين لهذه الدورة.</td></tr>`;
   const secHead = [1,2,3,4].map(k=>`<th colspan="4" style="text-align:center;">المقطع ${k}</th>`).join('');
   const secSub = [1,2,3,4].map(()=>'<th title="فتح">ف</th><th title="لحن جلي">ج</th><th title="لحن خفي">خ</th><th title="تنبيه">ت</th>').join('');
   return `
-    <div class="breadcrumb"><span onclick="programView=null;render();">${esc(programLabel(p))}</span> ← كشف التسميع النهائي</div>
+    <div class="breadcrumb"><span onclick="groupFinalView=false;render();">${esc(g.name)}</span> ← كشف التسميع النهائي — ${esc(programLabel(p))}</div>
     <div class="pagehead">
-      <div><h1>كشف التسميع النهائي — ${esc(programLabel(p))}</h1><p>أدخل عدد الأخطاء لكل مقطع، والنظام يحسب العلامة النهائية والترتيب تلقائيًا.</p></div>
+      <div><h1>كشف التسميع النهائي — ${esc(g.name)} ${sh.finalized?'<span class="tag" style="background:#e4efe8;color:var(--emerald-700);">✔ منتهية</span>':''}</h1><p>${esc(programLabel(p))} · أدخل عدد الأخطاء لكل مقطع، والنظام يحسب العلامة النهائية والترتيب تلقائيًا.</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-ghost" onclick="openModal('finalSettings','${pid}')">⚙️ معايير الحساب</button>
-        <button class="btn btn-ghost" onclick="openReportModal('finalSheet',{pid:'${pid}'})">🖨️ طباعة / تصدير</button>
-        <button class="btn btn-primary" onclick="finalizeProgram('${pid}')">✅ إنهاء الدورة وحفظ نسخة PDF</button>
+        <button class="btn btn-ghost" onclick="openModal('finalSettings','${key}')">⚙️ معايير الحساب</button>
+        <button class="btn btn-ghost" onclick="openReportModal('finalSheet',{pid:'${pid}',gid:'${gid}'})">🖨️ طباعة / تصدير</button>
+        <button class="btn btn-primary" onclick="finalizeGroupProgram('${pid}','${gid}')">✅ إنهاء وحفظ نسخة PDF</button>
       </div>
     </div>
     <div class="warn-box" style="margin-bottom:12px;">ف = فتح (خصم ${sh.settings.wFath}) · ج = لحن جلي (خصم ${sh.settings.wJali}) · خ = لحن خفي (خصم ${sh.settings.wKhafi}) · ت = تنبيه (خصم ${sh.settings.wTanbih}). فتح+جلي من ${sh.settings.maxFJ}، خفي+تنبيه من ${sh.settings.maxKT}، الحضور من ${sh.settings.maxAtt} (خصم ${sh.settings.absCost} لكل غياب، يُحسب من كشف الحضور تلقائيًا ويمكن تعديله)، الصلاة والسلوك من ${sh.settings.maxPrayer}، وعدد الصفحات × ${sh.settings.pageMult}. علّم «✓» عند الطالب الذي تم تسميعه ليدخل بالترتيب.</div>
     <div class="card" style="padding:14px 16px;margin-bottom:14px;">
       <label>أعضاء اللجنة (اثنان أو ثلاثة)</label>
       <div class="row2" style="grid-template-columns:repeat(3,1fr);">
-        ${[0,1,2].map(i=>`<input data-fk="f:committee${i}" placeholder="عضو اللجنة ${i+1}" value="${esc(sh.committee[i]||'')}" onchange="saveFinalCommittee('${pid}',${i},this.value)">`).join('')}
+        ${[0,1,2].map(i=>`<input data-fk="f:committee${i}" placeholder="عضو اللجنة ${i+1}" value="${esc(sh.committee[i]||'')}" onchange="saveFinalCommittee('${pid}','${gid}',${i},this.value)">`).join('')}
       </div>
     </div>
     <div class="card" data-keepscroll="final" style="padding:10px 12px;overflow:auto;">
@@ -2077,38 +2117,38 @@ function autoPortion(s,pid){
   const names = programMemorizedNames(s,pid);
   return names.join('، ');
 }
-function saveFinalRow(pid, sid, field, value){
+function saveFinalRow(pid, gid, sid, field, value){
   let v = value;
   if(field==='pages' || field==='prayer') v = (value===''? '' : Number(value)||0);
   if(field==='absOverride') v = (value===''? null : Number(value)||0);
   if(field==='done') v = !!value;
-  db.collection('finalSheets').doc(pid).set({rows:{[sid]:{[field]:v}}}, {merge:true});
+  db.collection('finalSheets').doc(finalSheetDocId(pid,gid)).set({pid, gid, rows:{[sid]:{[field]:v}}}, {merge:true});
 }
-function saveFinalSec(pid, sid, k, m, value){
-  const sh = getFinalSheet(pid);
+function saveFinalSec(pid, gid, sid, k, m, value){
+  const sh = getFinalSheet(pid, gid);
   const row = sh.rows[sid] || {};
   const sec = [0,1,2,3].map(i=>({f:0,j:0,x:0,t:0, ...((row.sec||[])[i]||{})}));
   sec[k][m] = Number(value)||0;
-  db.collection('finalSheets').doc(pid).set({rows:{[sid]:{sec}}}, {merge:true});
+  db.collection('finalSheets').doc(finalSheetDocId(pid,gid)).set({pid, gid, rows:{[sid]:{sec}}}, {merge:true});
 }
-function saveFinalCommittee(pid, i, value){
-  const sh = getFinalSheet(pid);
+function saveFinalCommittee(pid, gid, i, value){
+  const sh = getFinalSheet(pid, gid);
   const cm = sh.committee.slice(); cm[i] = value.trim();
-  db.collection('finalSheets').doc(pid).set({committee: cm}, {merge:true});
+  db.collection('finalSheets').doc(finalSheetDocId(pid,gid)).set({pid, gid, committee: cm}, {merge:true});
 }
 function submitFinalSettings(){
-  const pid = document.getElementById('fs_pid').value;
+  const [pid, gid] = document.getElementById('fs_key').value.split('|');
   const keys = ['maxFJ','maxKT','wFath','wJali','wKhafi','wTanbih','maxAtt','absCost','maxPrayer','pageMult','honorPct'];
   const settings = {};
   keys.forEach(k=>{ const v = parseFloat(document.getElementById('fs_'+k).value); settings[k] = isNaN(v)? defaultFinalSettings()[k] : v; });
-  db.collection('finalSheets').doc(pid).set({settings}, {merge:true}).then(()=>{closeModal();toast('تم الحفظ');});
+  db.collection('finalSheets').doc(finalSheetDocId(pid,gid)).set({pid, gid, settings}, {merge:true}).then(()=>{closeModal();toast('تم الحفظ');});
 }
-/* إنهاء الدورة: يعلّمها منتهية ويولّد نسخة PDF تلقائيًا (وتقدر تطبع يدويًا بأي وقت) */
-function finalizeProgram(pid){
-  const p = PROGRAMS.find(x=>x.id===pid); if(!p) return;
-  if(!confirm(`إنهاء ${programLabel(p)} وحفظ نسخة PDF من كشف التسميع النهائي وما تم حفظه؟`)) return;
-  db.collection('programs').doc(pid).update({finalized:true, finalizedAt:Date.now()}).then(()=>{
-    const rep = buildReport('courseClose', {pid});
+/* إنهاء كشف هذه المجموعة لهذه الدورة: يعلّمه منتهيًا ويولّد نسخة PDF تلقائيًا (وتقدر تطبع يدويًا بأي وقت) */
+function finalizeGroupProgram(pid, gid){
+  const p = PROGRAMS.find(x=>x.id===pid), g = GROUPS.find(x=>x.id===gid); if(!p||!g) return;
+  if(!confirm(`إنهاء كشف "${g.name}" — ${programLabel(p)} وحفظ نسخة PDF؟`)) return;
+  db.collection('finalSheets').doc(finalSheetDocId(pid,gid)).set({pid, gid, finalized:true, finalizedAt:Date.now()}, {merge:true}).then(()=>{
+    const rep = buildReport('courseClose', {pid, gid});
     CURRENT_REPORT = rep;
     exportCurrent('pdf');
   });
@@ -2391,8 +2431,8 @@ const sn = s=>esc(s.fullName||s.name||'');
 function statusTxt(st){ return st==='present'?'حاضر':st==='absent'?'غائب':''; }
 function surahName(n){ const x=SURAHS[Number(n)-1]; return x? x.name : ''; }
 
-function finalTableForReport(pid){
-  const d = finalSheetData(pid);
+function finalTableForReport(pid, gid){
+  const d = finalSheetData(pid, gid);
   const {sh, rows, ranks} = d;
   const ordered = rows.slice().sort((a,b)=>{
     const ra = a.done && ranks[a.s.id] ? ranks[a.s.id].rank : 9999, rb = b.done && ranks[b.s.id] ? ranks[b.s.id].rank : 9999;
@@ -2458,16 +2498,16 @@ function buildReportInner(type, p){
     return R(`جدول الدوام — ${g.name} — ${p.date} (${dayNameOf(p.date)})`, `${rpKV([['النادي',esc(programLabel(pr))],['المعلم/ة',esc(g.teacherName||'—')]],'معلومات')}${rpTable(['#','الطالب','الحضور','السورة','من آية','إلى آية','التقدير','ختمها','ملاحظات'],rows,'جدول اليوم')}`, `دوام-${g.name}-${p.date}`, 'landscape');
   }
   if(type==='finalSheet'){
-    const pr = PROGRAMS.find(x=>x.id===p.pid); if(!pr) return R('كشف التسميع','<p>لا يوجد</p>');
-    const f = finalTableForReport(pr.id);
-    return R('كشف التسميع النهائي — '+programLabel(pr), f.html, 'كشف-التسميع-'+programLabel(pr), 'landscape');
+    const pr = PROGRAMS.find(x=>x.id===p.pid), g = GROUPS.find(x=>x.id===p.gid); if(!pr||!g) return R('كشف التسميع','<p>لا يوجد</p>');
+    const f = finalTableForReport(pr.id, g.id);
+    return R('كشف التسميع النهائي — '+g.name+' — '+programLabel(pr), f.html, 'كشف-التسميع-'+g.name+'-'+programLabel(pr), 'landscape');
   }
   if(type==='courseClose'){
-    const pr = PROGRAMS.find(x=>x.id===p.pid); if(!pr) return R('ختام الدورة','<p>لا يوجد</p>');
-    const f = finalTableForReport(pr.id);
-    const studs = STUDENTS.filter(s=>studentInProgram(s,pr.id)).sort(byName);
+    const pr = PROGRAMS.find(x=>x.id===p.pid), g = GROUPS.find(x=>x.id===p.gid); if(!pr||!g) return R('ختام الدورة','<p>لا يوجد</p>');
+    const f = finalTableForReport(pr.id, g.id);
+    const studs = STUDENTS.filter(s=>s.groupId===g.id && studentInProgram(s,pr.id)).sort(byName);
     const mem = rpTable(['#','الطالب','ما حفظه في الدورة','أيام الغياب'],studs.map((s,i)=>[i+1,sn(s),esc(programMemorizedNames(s,pr.id).join('، ')),countAbsences(s,pr.id)]),'محفوظات الدورة');
-    return R('ختام الدورة — '+programLabel(pr), `${rpKV([['الدورة',esc(programLabel(pr))],['المدة',`${esc(pr.startDate||'')} → ${esc(pr.endDate||'')}`],['عدد الطلاب',studs.length]],'الدورة')}<h3>كشف التسميع النهائي</h3>${f.html}<h3>ما تم حفظه في الدورة</h3>${mem}`, 'ختام-'+programLabel(pr), 'landscape');
+    return R('ختام الدورة — '+g.name+' — '+programLabel(pr), `${rpKV([['الدورة',esc(programLabel(pr))],['المجموعة',esc(g.name)],['المدة',`${esc(pr.startDate||'')} → ${esc(pr.endDate||'')}`],['عدد الطلاب',studs.length]],'الدورة')}<h3>كشف التسميع النهائي</h3>${f.html}<h3>ما تم حفظه في الدورة</h3>${mem}`, 'ختام-'+g.name+'-'+programLabel(pr), 'landscape');
   }
   if(type==='programSummary'){
     const pr = PROGRAMS.find(x=>x.id===p.pid); if(!pr) return R('ملخص دورة','<p>لا يوجد</p>');
@@ -2512,8 +2552,8 @@ const REPORT_TYPES = [
   {id:'groupMemo', label:'كشف الحفظ والتقديرات لمجموعة', params:['gid']},
   {id:'attendanceSheet', label:'كشف الحضور والغياب لنادي / دورة', params:['pid','gidOpt']},
   {id:'dailySheet', label:'جدول دوام يوم لمجموعة', params:['gid','pid','date']},
-  {id:'finalSheet', label:'كشف التسميع النهائي لدورة', params:['pid']},
-  {id:'courseClose', label:'ملف ختام دورة (كشف التسميع + المحفوظات)', params:['pid']},
+  {id:'finalSheet', label:'كشف التسميع النهائي (لمجموعة ضمن دورة)', params:['pid','gid']},
+  {id:'courseClose', label:'ملف ختام دورة لمجموعة (كشف التسميع + المحفوظات)', params:['pid','gid']},
   {id:'programSummary', label:'ملخص دورة / نادي', params:['pid']},
   {id:'honorSheet', label:'قائمة الشرف (حفظة المصحف كاملًا)', params:['gender']},
   {id:'tajweedSheet', label:'كشف التجويد', params:['lid']},
