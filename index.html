@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet">
+<meta name="referrer" content="no-referrer">
 <title>مركز الإسراء القرآني</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -340,6 +343,8 @@ table.compact th,table.compact td{padding:6px 7px;font-size:12.5px;}
 .section-title{font-family:'Amiri',serif;font-size:17px;color:var(--emerald-800);margin:24px 0 10px;}
 .report-preview{background:#fff;border:1px solid var(--line);border-radius:10px;padding:18px;overflow:auto;max-height:520px;}
 .warn-box{background:#fdf1d8;border:1px solid #ecd9a4;color:#7a5c0f;border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.8;}
+.badge-n{display:inline-block;min-width:18px;padding:0 6px;border-radius:99px;background:#e0524a;color:#fff;font-size:11.5px;font-weight:700;text-align:center;}
+.sub-row td{background:#faf8f0;}
 @media print{
   .sidebar,.toast,.overlay,.pagehead .btn,.toolbar{display:none !important;}
   .main{padding:0;max-width:none;}
@@ -471,6 +476,11 @@ const PROGRAM_TYPES = ["النادي الدائم الأول","النادي ال
 let db=null, unsubGroups=null, unsubStudents=null, unsubAdmins=null, unsubCycles=null, unsubPrograms=null, unsubAnnouncements=null, unsubSettings=null;
 let GROUPS=[], STUDENTS=[], ADMINS=[], CYCLES=[], PROGRAMS=[], ANNOUNCEMENTS=[], SETTINGS={};
 let unsubHonor=null, unsubTajLevels=null, unsubTajLessons=null, unsubFinals=null, unsubPresence=null;
+let RAWDB=null, GUARD_OFF=false;
+let RAW_GROUPS=[], RAW_STUDENTS=[], RAW_CYCLES=[], RAW_FINALS=[];
+let unsubNotifs=null, unsubNotes=null;
+let NOTIFS=[], NOTES=[];
+let notifTs = {}, notifsFirstLoad = true;
 let HONOR=[], TAJ_LEVELS=[], TAJ_LESSONS=[], FINALS=[], PRESENCE={};
 let dataVer = 0;
 let addStudentTajweed = false;
@@ -504,11 +514,11 @@ function saveConfig(){
     const cfg = Function('"use strict";return (' + objStr + ')')();
     if(!cfg.apiKey || !cfg.projectId) throw new Error('بيانات ناقصة');
     firebase.initializeApp(cfg);
-    db = firebase.firestore();
+    RAWDB = firebase.firestore(); db = makeGuardedDb(RAWDB);
     document.getElementById('setupScreen').classList.add('hidden');
     const savedSession = sessionStorage.getItem('isra_session');
     subscribeAll(()=>{
-      if(savedSession){ session = JSON.parse(savedSession); showApp(); }
+      if(savedSession){ session = JSON.parse(savedSession); applyScope(); showApp(); }
       else document.getElementById('loginScreen').classList.remove('hidden');
     });
   }catch(e){
@@ -519,7 +529,7 @@ function saveConfig(){
 function boot(){
   try{
     firebase.initializeApp(FIREBASE_CONFIG);
-    db = firebase.firestore();
+    RAWDB = firebase.firestore(); db = makeGuardedDb(RAWDB);
   }catch(e){
     document.getElementById('setupScreen').classList.remove('hidden');
     document.getElementById('setupError').textContent = 'تعذّر الاتصال بقاعدة البيانات: ' + e.message;
@@ -528,7 +538,7 @@ function boot(){
   const savedSession = sessionStorage.getItem('isra_session');
   subscribeAll(()=>{
     if(savedSession){
-      session = JSON.parse(savedSession);
+      session = JSON.parse(savedSession); applyScope();
       if(session.role==='admin') startPresence();
       showApp();
     } else {
@@ -539,7 +549,7 @@ function boot(){
 
 /* ---------------- اشتراكات لحظية Firestore ---------------- */
 function subscribeAll(onFirstLoad){
-  let loaded = {g:false,s:false,a:false,c:false,p:false,an:false,st:false,h:false,tl:false,tls:false,fin:false};
+  let loaded = {g:false,s:false,a:false,c:false,p:false,an:false,st:false,h:false,tl:false,tls:false,fin:false,nf:false,nt:false};
   const checkLoaded = ()=>{
     if(Object.values(loaded).every(Boolean) && !dataReady){
       dataReady = true;
@@ -547,22 +557,22 @@ function subscribeAll(onFirstLoad){
     }
   };
   unsubGroups = db.collection('groups').orderBy('createdAt').onSnapshot(snap=>{
-    GROUPS = snap.docs.map(d=>({id:d.id,...d.data()}));
+    RAW_GROUPS = snap.docs.map(d=>({id:d.id,...d.data()})); applyScope();
     loaded.g = true; checkLoaded(); dataVer++; render();
   }, err=>toast('تعذّر تحميل المجموعات: '+err.code));
 
   unsubStudents = db.collection('students').onSnapshot(snap=>{
-    STUDENTS = snap.docs.map(d=>({id:d.id,...d.data()}));
+    RAW_STUDENTS = snap.docs.map(d=>({id:d.id,...d.data()})); applyScope();
     loaded.s = true; checkLoaded(); dataVer++; render();
   }, err=>toast('تعذّر تحميل الطلاب: '+err.code));
 
   unsubAdmins = db.collection('admins').onSnapshot(snap=>{
-    ADMINS = snap.docs.map(d=>({id:d.id,...d.data()}));
+    ADMINS = snap.docs.map(d=>({id:d.id,...d.data()})); applyScope();
     loaded.a = true; checkLoaded(); dataVer++; render();
   }, err=>toast('تعذّر تحميل المسؤولين: '+err.code));
 
   unsubCycles = db.collection('cycles').orderBy('date','desc').onSnapshot(snap=>{
-    CYCLES = snap.docs.map(d=>({id:d.id,...d.data()}));
+    RAW_CYCLES = snap.docs.map(d=>({id:d.id,...d.data()})); applyScope();
     loaded.c = true; checkLoaded(); dataVer++; render();
   }, err=>toast('تعذّر تحميل الدورات: '+err.code));
 
@@ -597,9 +607,23 @@ function subscribeAll(onFirstLoad){
   }, err=>toast('تعذّر تحميل دروس التجويد: '+err.code));
 
   unsubFinals = db.collection('finalSheets').onSnapshot(snap=>{
-    FINALS = snap.docs.map(d=>({id:d.id,...d.data()}));
+    RAW_FINALS = snap.docs.map(d=>({id:d.id,...d.data()})); applyScope();
     loaded.fin = true; checkLoaded(); dataVer++; render();
   }, err=>toast('تعذّر تحميل كشوف التسميع: '+err.code));
+
+  unsubNotifs = db.collection('notifications').onSnapshot(snap=>{
+    NOTIFS = snap.docs.map(d=>({id:d.id,...d.data()}));
+    const fresh = [];
+    NOTIFS.forEach(n=>{ if(!notifsFirstLoad && (!(n.id in notifTs) || (n.createdAt||0) > notifTs[n.id])) fresh.push(n); notifTs[n.id] = n.createdAt||0; });
+    notifsFirstLoad = false;
+    loaded.nf = true; checkLoaded(); render();
+    fresh.forEach(incomingNotif);
+  }, err=>{ loaded.nf = true; checkLoaded(); });
+
+  unsubNotes = db.collection('studentNotes').onSnapshot(snap=>{
+    NOTES = snap.docs.map(d=>({id:d.id,...d.data()}));
+    loaded.nt = true; checkLoaded(); render();
+  }, err=>{ loaded.nt = true; checkLoaded(); });
 
   /* حضور المسؤولين — لا يستدعي render() كي لا يقطع الكتابة */
   unsubPresence = db.collection('presence').onSnapshot(snap=>{
@@ -621,13 +645,206 @@ function meAdmin(){ return session && session.role==='admin' ? ADMINS.find(a=>a.
 /* صلاحية رؤية/تغيير أسماء المستخدمين وكلمات السر للمسؤولين: المشرف الرئيسي دائمًا، وغيره حسب ما يحدده */
 function canSeeCreds(){
   if(!session || session.role!=='admin') return false;
-  if(isMainAdmin()) return true;
+  if(isSuper()) return true;
   const a = meAdmin();
   return !!(a && a.canViewCreds===true);
 }
 
+/* =========================================================
+   نظام الصلاحيات: أدوار (رئيسي / كبير / محدود) + نطاق مجموعات + صلاحية لكل قسم
+   ملاحظة: التطبيق الحالي يفرض الصلاحيات من جهة الواجهة؛ الفرض الحقيقي على مستوى
+   قاعدة البيانات يتم بترقية الأمان (Firebase Authentication + Rules).
+   ========================================================= */
+const PERM_SECTIONS = [['groups','المجموعات'],['roster','الكشف العام'],['programs','البرامج والدورات'],['tajweed','التجويد'],['honor','قائمة الشرف'],['reports','التقارير والطباعة'],['announcements','الإعلانات'],['settings','الإعدادات'],['admins','المسؤولون']];
+function myAdmin(){ return (session && session.role==='admin') ? ADMINS.find(a=>a.id===session.id) : null; }
+function isLegacyAdmin(a){ return !!a && a.role===undefined && a.perms===undefined; }
+function isBigAdmin(a){ return !!a && (a.id===mainAdminId() || a.role==='full'); }
+function isSuper(){ return isBigAdmin(myAdmin()); }
+function effPerms(a){
+  const out = {};
+  PERM_SECTIONS.forEach(([k])=>{ out[k] = (isBigAdmin(a) || isLegacyAdmin(a)) ? 'edit' : (((a.perms||{})[k]==='edit'||(a.perms||{})[k]==='view') ? a.perms[k] : 'none'); });
+  return out;
+}
+function permLevel(sec){
+  const a = myAdmin(); if(!a) return 'none';
+  return effPerms(a)[sec] || 'none';
+}
+function canViewSec(sec){ return permLevel(sec)!=='none'; }
+function canEditSec(sec){ return permLevel(sec)==='edit'; }
+function effScope(a){ if(isBigAdmin(a) || isLegacyAdmin(a)) return 'all'; return a.scope || 'own'; }
+function adminScope(){ const a = myAdmin(); return a ? effScope(a) : 'all'; }
+function myGroupIds(){ const a = myAdmin(); return (a && a.groupIds) || []; }
+function canEditGroupScope(gid){ if(adminScope()==='all') return true; return !!gid && myGroupIds().includes(gid); }
+function effFlag(a, name){ if(isBigAdmin(a) || isLegacyAdmin(a)) return true; return a[name]===true; }
+function flagOf(name){ const a = myAdmin(); return a ? effFlag(a, name) : false; }
+function canDeleteStuff(){ return flagOf('canDelete'); }
+function canSeeContact(){ return flagOf('seeContact'); }
+function canSeeStudentPass(){ return flagOf('seeStudentPass'); }
+function canManageAdmins(){ return isSuper() || (canSeeCreds() && permLevel('admins')==='edit'); }
+function ctx(v){ return canSeeContact() ? esc(v||'—') : '<span class="mini-note">مخفي</span>'; }
+function ctt(v){ return canSeeContact() ? esc(v||'') : 'مخفي'; }
+
+/* ---- قفل واجهة القراءة فقط: إخفاء أزرار/حقول التعديل حيث لا توجد صلاحية (الحارس بالأعلى يمنع الكتابة فعليًا) ---- */
+const WRITE_FN_RE = /(?:^|[^A-Za-z])(save[A-Za-z]*|update[A-Za-z]*|toggle[A-Za-z]*|submit[A-Za-z]*|delete[A-Za-z]*|unassign[A-Za-z]*|trueDelete[A-Za-z]*|setAdmin[A-Za-z]*|tajSetStatus|tajAdd|tajRemove|finalize[A-Za-z]*|addExtra[A-Za-z]*|removeExtra[A-Za-z]*|addStudentNote|restoreFromFile|linkBackupFile|resumeBackup|unlinkBackup|writeBackupNow|applyPerm[A-Za-z]*)\(/;
+const WRITE_MODAL_RE = /openModal\('(?:add|edit|final)/;
+const DELETE_BTN_RE = /(?:deleteGroup|deleteProgram|deleteTajLevel|trueDeleteStudent)\(/;
+function lockContainer(root){
+  if(!root) return;
+  root.querySelectorAll('button, label.btn').forEach(el=>{
+    const oc = el.getAttribute('onclick')||'';
+    if(WRITE_FN_RE.test(oc) || WRITE_MODAL_RE.test(oc) || /addStudentTajweed=true/.test(oc) || el.querySelector('input[type=file]')) el.style.display='none';
+  });
+  root.querySelectorAll('input, select, textarea').forEach(el=>{
+    const hnd = (el.getAttribute('onchange')||'')+(el.getAttribute('oninput')||'');
+    if(WRITE_FN_RE.test(hnd) || el.type==='file') el.disabled = true;
+  });
+  root.querySelectorAll('[data-write]').forEach(el=>{ el.style.display='none'; });
+}
+function hideDeleteButtons(root){
+  if(!root) return;
+  root.querySelectorAll('button').forEach(el=>{ if(DELETE_BTN_RE.test(el.getAttribute('onclick')||'')) el.style.display='none'; });
+}
+function pageEditable(){
+  switch(activeTab){
+    case 'groups': return currentGroupId ? (canEditSec('groups') && canEditGroupScope(currentGroupId)) : (canEditSec('groups') && adminScope()==='all');
+    case 'roster': return canEditSec('roster');
+    case 'programs': return canEditSec('programs');
+    case 'tajweed': return canEditSec('tajweed');
+    case 'honor': return canEditSec('honor');
+    case 'announcements': return canEditSec('announcements');
+    case 'settings': return canEditSec('settings');
+    default: return true;
+  }
+}
+function applyPermissionLock(){
+  const main = document.getElementById('mainArea');
+  if(!pageEditable()) lockContainer(main);
+  if(!canDeleteStuff()) hideDeleteButtons(main);
+}
+function relockStudent(el){
+  if(editingStudentId && !studentEditableById(editingStudentId)) lockContainer(el);
+  if(!canDeleteStuff()) hideDeleteButtons(el);
+}
+function lockIf(el, editable){ if(!editable) lockContainer(el); if(!canDeleteStuff()) hideDeleteButtons(el); }
+
+/* تقليص البيانات المعروضة حسب نطاق المسؤول: "مجموعاتي فقط" بتخفي باقي المجموعات وطلابها */
+function applyScope(){
+  const adm = !!session && session.role==='admin';
+  if(!adm || adminScope()!=='own'){ GROUPS = RAW_GROUPS; STUDENTS = RAW_STUDENTS; CYCLES = RAW_CYCLES; FINALS = RAW_FINALS; return; }
+  const ids = new Set(myGroupIds());
+  GROUPS = RAW_GROUPS.filter(g=>ids.has(g.id));
+  STUDENTS = RAW_STUDENTS.filter(s=>ids.has(s.groupId));
+  CYCLES = RAW_CYCLES.filter(x=>ids.has(x.groupId));
+  FINALS = RAW_FINALS.filter(f=>!f.gid || ids.has(f.gid));
+}
+
+function rawStudent(id){ return RAW_STUDENTS.find(s=>s.id===id); }
+function studentEditableById(sid){
+  const st = rawStudent(sid); if(!st) return false;
+  if(!(canEditSec('groups') || canEditSec('roster'))) return false;
+  return canEditGroupScope(st.groupId || null);
+}
+function studentWriteAllowed(id, data, op){
+  const keys = Object.keys(data||{});
+  const tajOnly = keys.length>0 && keys.every(k=>k==='inTajweed' || k.startsWith('tajweed'));
+  if(tajOnly) return canEditSec('tajweed');
+  if(!(canEditSec('groups') || canEditSec('roster'))) return false;
+  if(op==='add') return canEditGroupScope((data&&data.groupId)||null);
+  if(op==='delete') return canDeleteStuff() && studentEditableById(id);
+  if(!studentEditableById(id)) return false;
+  if(keys.includes('groupId') && data.groupId && !canEditGroupScope(data.groupId)) return false;
+  return true;
+}
+function adminWriteAllowed(id, op, data){
+  const me = myAdmin(); if(!me) return false;
+  const mainId = mainAdminId();
+  const target = ADMINS.find(a=>a.id===id);
+  const keys = Object.keys(data||{});
+  if(op==='add'){
+    if(isSuper()) return !(data && data.role==='full' && !isMainAdmin());
+    return canManageAdmins() && !(data && (data.role==='full' || data.canViewCreds===true));
+  }
+  if(op==='delete'){
+    if(id===mainId || id===session.id) return false;
+    if(target && target.role==='full' && !isMainAdmin()) return false;
+    return canManageAdmins();
+  }
+  if(id===session.id) return keys.every(k=>['name','username','password','profile'].includes(k));
+  if(!isSuper()) return false;
+  if(id===mainId) return false;
+  if(target && target.role==='full' && !isMainAdmin()) return false;
+  if(keys.includes('role') && data.role==='full' && !isMainAdmin()) return false;
+  return true;
+}
+function guardAllow(name, id, op, data){
+  if(GUARD_OFF || !session) return true;
+  if(session.role!=='admin') return false;
+  if(name==='presence' || name==='notifications') return true;
+  if(name==='admins') return adminWriteAllowed(id, op, data);
+  if(isSuper()) return true;
+  const gidOfSheet = ()=> (data && data.gid) || String(id||'').split('__')[1];
+  switch(name){
+    case 'groups':
+      if(!canEditSec('groups')) return false;
+      if(op==='add') return adminScope()==='all';
+      if(op==='delete') return adminScope()==='all' && canDeleteStuff();
+      return canEditGroupScope(id);
+    case 'cycles': {
+      if(!canEditSec('groups')) return false;
+      const gid = op==='add' ? (data&&data.groupId) : (RAW_CYCLES.find(x=>x.id===id)||{}).groupId;
+      return canEditGroupScope(gid);
+    }
+    case 'finalSheets': return canEditSec('groups') && canEditGroupScope(gidOfSheet());
+    case 'students': return studentWriteAllowed(id, data, op);
+    case 'studentNotes': {
+      const sid = op==='add' ? (data&&data.studentId) : (NOTES.find(x=>x.id===id)||{}).studentId;
+      return studentEditableById(sid);
+    }
+    case 'programs': return canEditSec('programs') && (op!=='delete' || canDeleteStuff());
+    case 'announcements': return canEditSec('announcements');
+    case 'honor': return canEditSec('honor');
+    case 'tajweedLevels': return canEditSec('tajweed') && (op!=='delete' || canDeleteStuff());
+    case 'tajweedLessons': return canEditSec('tajweed');
+    case 'settings': return canEditSec('settings');
+  }
+  return false;
+}
+let denyToastAt = 0;
+function denyWrite(){
+  const t = Date.now();
+  if(t-denyToastAt>1500){ denyToastAt = t; toast('ما عندك صلاحية لهذا الإجراء'); }
+  return new Promise(()=>{});
+}
+function makeGuardedDb(raw){
+  const wrapDoc = (name,id,d)=> new Proxy(d, { get(t,p){
+    if(p==='__raw') return t; if(p==='__name') return name; if(p==='__id') return id;
+    if(p==='set') return (data,opts)=> guardAllow(name,id,'set',data) ? t.set(data,opts) : denyWrite();
+    if(p==='update') return (data)=> guardAllow(name,id,'update',data) ? t.update(data) : denyWrite();
+    if(p==='delete') return ()=> guardAllow(name,id,'delete') ? t.delete() : denyWrite();
+    const v = t[p]; return typeof v==='function' ? v.bind(t) : v;
+  }});
+  const wrapCol = (name,cl)=> new Proxy(cl, { get(t,p){
+    if(p==='add') return (data)=> guardAllow(name,null,'add',data) ? t.add(data) : denyWrite();
+    if(p==='doc') return (id)=> wrapDoc(name,id,t.doc(id));
+    const v = t[p]; return typeof v==='function' ? v.bind(t) : v;
+  }});
+  return {
+    collection:(name)=>wrapCol(name, raw.collection(name)),
+    batch(){
+      const b = raw.batch(); let ok = true;
+      const api = {
+        set(ref,data,opts){ if(!guardAllow(ref.__name,ref.__id,'set',data)) ok=false; b.set(ref.__raw||ref,data,opts); return api; },
+        update(ref,data){ if(!guardAllow(ref.__name,ref.__id,'update',data)) ok=false; b.update(ref.__raw||ref,data); return api; },
+        delete(ref){ if(!guardAllow(ref.__name,ref.__id,'delete')) ok=false; b.delete(ref.__raw||ref); return api; },
+        commit(){ return ok ? b.commit() : denyWrite(); }
+      };
+      return api;
+    }
+  };
+}
+
 function startSession(s){
-  session = s;
+  session = s; applyScope();
   sessionStorage.setItem('isra_session', JSON.stringify(session));
   if(session.role==='admin') startPresence();
   showApp();
@@ -664,7 +881,7 @@ function logout(msg){
   }
   stopPresence();
   sessionStorage.removeItem('isra_session');
-  session=null; currentGroupId=null; currentProgramId=null; groupFinalView=false; groupFinalProgramId=null;
+  session=null; applyScope(); currentGroupId=null; currentProgramId=null; groupFinalView=false; groupFinalProgramId=null;
   document.getElementById('app').classList.remove('show');
   document.getElementById('loginScreen').classList.remove('hidden');
   document.getElementById('loginPass').value='';
@@ -676,7 +893,7 @@ function showApp(){
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('app').classList.add('show');
   render();
-  if(session && session.role==='admin'){ seedTajweedIfNeeded(); initAutoBackup(); }
+  if(session && session.role==='admin'){ seedTajweedIfNeeded(); if(isSuper()) initAutoBackup(); }
 }
 
 /* ---------------- حضور المسؤولين (نشط الآن) ---------------- */
@@ -707,10 +924,10 @@ function updatePresenceUI(){
 setInterval(updatePresenceUI, 30000);
 
 /* ---------------- أدوات مساعدة ---------------- */
-function toast(msg){
+function toast(msg, ms){
   const t=document.getElementById('toast');
   t.textContent=msg; t.classList.add('show');
-  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),2600);
+  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),ms||2600);
 }
 function esc(s){ return (s||'').toString().replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function newId(){ return Math.random().toString(36).slice(2,10); }
@@ -759,6 +976,7 @@ function render(){
   }
   const snap = captureUIState();
   if(session.role==='admin') renderAdmin(); else renderStudentView();
+  if(session.role==='admin') applyPermissionLock();
   restoreUIState(snap);
   if(session.role==='admin') scheduleAutoBackup();
 }
@@ -768,8 +986,10 @@ function render(){
    --------------------------------------------------------- */
 function renderAdmin(){
   const sb = document.getElementById('sidebarNav');
-  const navTab = (id,label,icon) => `<div class="navitem ${activeTab===id?'active':''}" onclick="setTab('${id}')">${icon} ${label}</div>`;
-  const role = isMainAdmin() ? 'المشرف الرئيسي' : 'مسؤول النظام';
+  const TAB_ORDER = ['groups','roster','programs','tajweed','honor','reports','announcements','settings','admins'];
+  if(!canViewSec(activeTab)){ const f = TAB_ORDER.find(canViewSec); if(f) activeTab = f; }
+  const navTab = (id,label,icon) => canViewSec(id) ? `<div class="navitem ${activeTab===id?'active':''}" onclick="setTab('${id}')">${icon} ${label}</div>` : '';
+  const role = isMainAdmin() ? 'المشرف الرئيسي' : (isSuper() ? 'مسؤول كبير' : 'مسؤول');
   sb.innerHTML = `
     <div class="brand"><div class="dot"><img src="${LOGO_URI}" style="width:26px;height:26px;object-fit:contain;border-radius:4px;"></div><div><h2>مركز الإسراء</h2><span>لوحة المسؤول</span></div></div>
     ${navTab('groups','المجموعات','📚')}
@@ -781,11 +1001,13 @@ function renderAdmin(){
     ${navTab('announcements','الإعلانات','📢')}
     ${navTab('settings','الإعدادات','⚙️')}
     ${navTab('admins','المسؤولون','🔑')}
+    <div class="navitem" onclick="openModal('adminProfile','${session.id}')">👤 ملفي الشخصي</div>
     <div class="spacer"></div>
     <div class="who"><b>${esc(session.name)}</b>${role}<div id="presenceBox" class="mini-note" style="margin-top:6px;color:#cfe3d8;line-height:1.7;">${activeAdminsHTML()}</div></div>
     <div class="navitem" onclick="logout()">🚪 تسجيل خروج</div>
   `;
   const main = document.getElementById('mainArea');
+  if(!TAB_ORDER.some(canViewSec)){ main.innerHTML = `<div class="empty"><h2>لا توجد صلاحيات</h2><p>ما انمنحت صلاحية لأي قسم بعد. تواصل مع المشرف الرئيسي.</p></div>`; return; }
   if(activeTab==='groups'){
     main.innerHTML = currentGroupId ? (groupFinalView ? finalSheetHTML(groupFinalProgramId, currentGroupId) : groupDetailHTML(currentGroupId)) : groupsListHTML();
   } else if(activeTab==='roster'){
@@ -825,21 +1047,30 @@ function fmtLocalDate(d){
   return `${y}-${m}-${day}`;
 }
 /* يولّد تواريخ أيام الدوام لبرنامج معيّن حسب نوعه ومدته: الدائم = كل سبت، الشتوي/الصيفي = سبت واثنين وأربعاء */
+function programExtraDates(p){
+  return ((p && p.extraDates) || []).filter(x=>x && x.date).map(x=>x.date);
+}
+function isExtraDay(p, d){ return programExtraDates(p).includes(d); }
 function programSessionDates(p){
-  if(!p || !p.startDate || !p.endDate) return [];
+  if(!p) return [];
   const isWinterSummer = p.type==='النادي الشتوي' || p.type==='النادي الصيفي';
   const allowedDays = isWinterSummer? [6,1,3] : [6];
-  const dates=[];
-  let d = new Date(p.startDate+'T00:00:00');
-  const end = new Date(p.endDate+'T00:00:00');
-  let guard=0;
-  while(d<=end && guard<2000){
-    if(allowedDays.includes(d.getDay())) dates.push(fmtLocalDate(d));
-    d.setDate(d.getDate()+1);
-    guard++;
+  const set = new Set();
+  if(p.startDate && p.endDate){
+    let d = new Date(p.startDate+'T00:00:00');
+    const end = new Date(p.endDate+'T00:00:00');
+    let guard=0;
+    while(d<=end && guard<2000){
+      if(allowedDays.includes(d.getDay())) set.add(fmtLocalDate(d));
+      d.setDate(d.getDate()+1);
+      guard++;
+    }
   }
-  return dates;
+  /* أيام إضافية يدوية (حالات استثنائية) خارج الأيام المحددة للنادي */
+  programExtraDates(p).forEach(x=>set.add(x));
+  return Array.from(set).sort();
 }
+function dayLabel(p, d){ return `${d} — ${dayNameOf(d)}${isExtraDay(p,d)?' (يوم إضافي)':''}`; }
 function rangeLabel(g){
   let parts=[];
   if(g.ageMin!=null && g.ageMax!=null && g.ageMin!=='' && g.ageMax!=='') parts.push(`العمر ${g.ageMin}-${g.ageMax}`);
@@ -921,7 +1152,7 @@ function groupDetailHTML(gid){
   return `
     <div class="breadcrumb"><span onclick="backToGroups()">المجموعات</span> ← ${esc(g.name)}</div>
     <div class="pagehead">
-      <div><h1>${esc(g.name)}</h1><p>${STUDENTS.filter(s=>s.groupId===gid).length} طالب مسجّل بهذه المجموعة${rangeLabel(g)}${g.teacherName? ' · المعلم/ة: '+esc(g.teacherName): ''}</p></div>
+      <div><h1>${esc(g.name)}</h1><p>${STUDENTS.filter(s=>s.groupId===gid).length} طالب مسجّل بهذه المجموعة${rangeLabel(g)}${g.teacherName? ' · المعلم/ة: '+esc(g.teacherName): ''}${groupAdminsLabel(g.id)}</p></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <button class="btn btn-ghost" onclick="openModal('editGroup','${gid}')">✎ تعديل المجموعة (الاسم / المعلم / الحدود)</button>
         <button class="btn btn-ghost" onclick="openModal('addCycle','${gid}')">🏆 إضافة دورة أوائل</button>
@@ -973,7 +1204,7 @@ function groupStudentTableInnerHTML(gid){
       <td>${p.done} / 114</td>
       <td style="min-width:120px;"><div class="bar-bg"><div class="bar-fg" style="width:${p.pct}%"></div></div></td>
       <td>${p.pct}%</td>
-      <td style="direction:ltr;text-align:left;">${esc(s.password)}</td>
+      <td style="direction:ltr;text-align:left;">${canSeeStudentPass()? esc(s.password) : '••••'}</td>
       <td style="white-space:nowrap;"><button class="btn btn-ghost btn-sm" onclick="openStudent('${s.id}')">فتح السجل</button>
           <button class="btn btn-danger btn-sm" onclick="unassignStudent('${s.id}','${esc(s.fullName||s.name)}')">إزالة من المجموعة</button></td>
     </tr>`;
@@ -989,7 +1220,7 @@ function groupStudentTableInnerHTML(gid){
 }
 function refreshGroupStudentTable(gid){
   const wrap = document.getElementById('groupStudentTableWrap');
-  if(wrap) wrap.innerHTML = groupStudentTableInnerHTML(gid);
+  if(wrap){ wrap.innerHTML = groupStudentTableInnerHTML(gid); lockIf(wrap, canEditSec('groups') && canEditGroupScope(gid)); }
 }
 
 /* ---------------------------------------------------------
@@ -1025,7 +1256,7 @@ function dailyTableSectionHTML(gid){
   const controls = `
     <div class="toolbar">
       <select style="width:auto;min-width:200px;" onchange="dailyProgramId=this.value;dailyDate=null;render();">${progOpts}</select>
-      ${dates.length? `<select style="width:auto;min-width:190px;" onchange="dailyDate=this.value;render();">${dates.map(d=>`<option value="${d}" ${d===dailyDate?'selected':''}>${d} — ${dayNameOf(d)}</option>`).join('')}</select>
+      ${dates.length? `<select style="width:auto;min-width:190px;" onchange="dailyDate=this.value;render();">${dates.map(d=>`<option value="${d}" ${d===dailyDate?'selected':''}>${dayLabel(p,d)}</option>`).join('')}</select>
       <button class="btn btn-ghost btn-sm" onclick="openReportModal('dailySheet',{gid:'${gid}',pid:'${p.id}',date:'${dailyDate}'})">🖨️ طباعة جدول هذا اليوم</button>
       <button class="btn btn-ghost btn-sm" onclick="openReportModal('attendanceSheet',{gid:'${gid}',pid:'${p.id}'})">🖨️ كشف الحضور الكامل للنادي</button>` : ''}
     </div>`;
@@ -1035,7 +1266,7 @@ function dailyTableSectionHTML(gid){
   const rows = studs.map(s=>{
     const rec = (((s.attendance||{})[p.id])||{})[dailyDate] || {};
     if(rec.status==='present') present++; if(rec.status==='absent') absent++;
-    return `<tr><td style="white-space:nowrap;"><b>${esc(s.fullName||s.name)}</b></td>${sessionCellsHTML(s.id, p.id, dailyDate, rec, 'd:'+s.id, true)}</tr>`;
+    return `<tr><td style="white-space:nowrap;"><b>${esc(s.fullName||s.name)}</b></td>${sessionCellsHTML(s.id, p.id, dailyDate, rec, 'd:'+s.id, true)}</tr>${extraRowsHTML(s.id, p.id, dailyDate, rec, 'd:'+s.id, 1)}`;
   }).join('') || `<tr><td colspan="8" style="text-align:center;color:var(--ink-400);padding:20px;">لا يوجد طلاب بهذه المجموعة</td></tr>`;
   return head + controls + `
     <div class="mini-note" style="margin-bottom:8px;">${esc(programLabel(p))} — ${dailyDate} (${dayNameOf(dailyDate)}) · حاضر: ${present} · غائب: ${absent}. أي تسميع بتسجله بينعكس تلقائيًا على سجل الطالب الرئيسي (محفوظة / قيد الحفظ + التقدير).</div>
@@ -1044,42 +1275,97 @@ function dailyTableSectionHTML(gid){
     </div>`;
 }
 
+function roleLabel(a){
+  if(a.id===mainAdminId()) return 'المشرف الرئيسي';
+  if(a.role==='full') return 'مسؤول كبير';
+  if(a.role==='limited') return 'مسؤول محدود';
+  return 'مسؤول (قديم — صلاحيات كاملة)';
+}
+function levelLabel(v){ return v==='edit'?'تعديل':v==='view'?'اطلاع':'—'; }
+function adminAccessSummary(a){
+  if(isBigAdmin(a)) return '<span class="tag">كل شي — كل المجموعات</span>';
+  const sc = effScope(a);
+  const names = (a.groupIds||[]).map(id=>{ const g = RAW_GROUPS.find(x=>x.id===id); return g? g.name : null; }).filter(Boolean);
+  const scTxt = sc==='all' ? 'كل المجموعات' : (sc==='own' ? 'مجموعاته فقط' : 'يعدّل مجموعاته ويطّلع على الباقي') + (names.length? ': '+names.map(esc).join('، ') : ' (لا مجموعات بعد)');
+  const ep = effPerms(a);
+  const parts = PERM_SECTIONS.filter(([k])=>ep[k]!=='none').map(([k,l])=>`${l}: ${levelLabel(ep[k])}`);
+  return `<div style="font-size:12.5px;">${scTxt}</div><div class="mini-note">${parts.join(' · ') || 'لا صلاحيات'}</div>`;
+}
+function groupAdminsLabel(gid){
+  const names = ADMINS.filter(a=>!isBigAdmin(a) && (a.groupIds||[]).includes(gid)).map(a=>esc(a.name));
+  return names.length ? ' · مسؤولو المجموعة: '+names.join('، ') : '';
+}
+function canEditAdminPerms(a){ return isSuper() && a.id!==mainAdminId() && a.id!==session.id && (a.role!=='full' || isMainAdmin()); }
+function canViewAdminProfile(a){ return a.id===session.id || (isSuper() && (a.id!==mainAdminId() || isMainAdmin()) && (a.role!=='full' || isMainAdmin())) || isMainAdmin(); }
 function adminsPageHTML(){
   const mainId = mainAdminId();
   const seeAll = canSeeCreds();
-  const iAmMain = isMainAdmin();
-  let rows = ADMINS.map(a=>{
+  const rows = ADMINS.map(a=>{
     const isMainRow = a.id===mainId;
     const isMe = a.id===session.id;
     const showCreds = seeAll || isMe;
-    const canEditThis = seeAll || isMe;
+    const canRemove = canManageAdmins() && !isMainRow && !isMe && !(a.role==='full' && !isMainAdmin());
     return `<tr>
-      <td><b>${esc(a.name)}</b>${isMainRow?' <span class="tag">المشرف الرئيسي</span>':''}${isMe?' <span class="tag">أنت</span>':''}</td>
+      <td><b>${esc(a.name)}</b>${isMe?' <span class="tag">أنت</span>':''}</td>
       <td style="direction:ltr;text-align:left;">${showCreds? esc(adminUsername(a)) : '<span class="mini-note">مخفي</span>'}</td>
       <td style="direction:ltr;text-align:left;">${showCreds? esc(a.password) : '<span class="mini-note">••••••</span>'}</td>
+      <td><span class="tag">${roleLabel(a)}</span></td>
+      <td>${adminAccessSummary(a)}</td>
       <td data-presence="${a.id}">${isActiveAdmin(a.id)?'<span class="dot-on"></span> نشط الآن':'<span class="dot-off"></span> غير متصل'}</td>
-      <td>${iAmMain && !isMainRow
-            ? `<label style="display:flex;align-items:center;gap:6px;font-weight:400;margin:0;"><input type="checkbox" style="width:auto;" ${a.canViewCreds===true?'checked':''} onchange="setAdminCredPerm('${a.id}',this.checked)"> يشوف/يغيّر بيانات الدخول</label>`
-            : (isMainRow ? '<span class="mini-note">كل الصلاحيات</span>' : (a.canViewCreds===true?'<span class="tag">يشوف بيانات الدخول</span>':'<span class="mini-note">بدون بيانات الدخول</span>'))}</td>
       <td style="white-space:nowrap;">
-        ${canEditThis? `<button class="btn btn-ghost btn-sm" onclick="openModal('editAdminCreds','${a.id}')">تغيير الاسم/كلمة السر</button>` : ''}
-        ${seeAll && !isMainRow && !isMe? `<button class="btn btn-danger btn-sm" onclick="deleteAdmin('${a.id}','${esc(a.name)}')">إزالة</button>` : ''}
+        ${(seeAll||isMe)? `<button class="btn btn-ghost btn-sm" onclick="openModal('editAdminCreds','${a.id}')">الاسم/كلمة السر</button>` : ''}
+        ${canEditAdminPerms(a)? `<button class="btn btn-primary btn-sm" onclick="openModal('adminPerms','${a.id}')">الصلاحيات</button>` : ''}
+        ${canViewAdminProfile(a)? `<button class="btn btn-ghost btn-sm" onclick="openModal('adminProfile','${a.id}')">الملف الشخصي</button>` : ''}
+        ${canRemove? `<button class="btn btn-danger btn-sm" onclick="deleteAdmin('${a.id}','${esc(a.name)}')">إزالة</button>` : ''}
       </td>
     </tr>`;
   }).join('');
   return `
     <div class="pagehead">
-      <div><h1>المسؤولون</h1><p>كل مسؤول له اسم مستخدم وكلمة سر خاصة. المشرف الرئيسي يحدد مين يقدر يشوف ويغيّر بيانات الدخول للمسؤولين — ونفس هذه الصلاحية هي يلي بتسمح بإضافة أو إزالة مسؤولين.</p></div>
-      ${seeAll? `<button class="btn btn-primary" onclick="openModal('addAdmin')">+ إضافة مسؤول</button>` : ''}
+      <div><h1>المسؤولون</h1><p>كل مسؤول له اسم مستخدم وكلمة سر وملف شخصي. المشرف الرئيسي والمسؤولون الكبار يحددون لكل مسؤول: شو يشوف وشو يعدّل، ومجموعاته، وإذا بيشوف بيانات التواصل وكلمات السر أو بيحذف.</p></div>
+      ${canManageAdmins()? `<button class="btn btn-primary" onclick="openModal('addAdmin')">+ إضافة مسؤول</button>` : ''}
     </div>
     <div class="card" style="padding:16px 18px;overflow-x:auto;">
-      <table><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>كلمة السر</th><th>الحالة</th><th>صلاحية بيانات الدخول</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+      <table><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>كلمة السر</th><th>الدور</th><th>النطاق والصلاحيات</th><th>الحالة</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     </div>
-    <p class="mini-note" style="margin-top:10px;">المسؤول اللي ما عنده صلاحية بيانات الدخول بيقدر يعدّل كل شي بالنظام ما عدا: رؤية/تغيير أسماء المستخدمين وكلمات السر لباقي المسؤولين، وإضافة أو إزالة أي مسؤول (وبيقدر يغيّر حسابه هو بس).</p>
+    <p class="mini-note" style="margin-top:10px;">الأدوار: <b>المشرف الرئيسي</b> (كل شي ولا أحد يعدّل عليه) · <b>مسؤول كبير</b> (صلاحية كاملة، يعيّنه المشرف الرئيسي فقط) · <b>مسؤول محدود</b> (حسب الصلاحيات والمجموعات المحددة له). المسؤولون القدامى (قبل هذا التحديث) محتفظين بصلاحياتهم السابقة إلى أن تضبطها لهم.</p>
   `;
 }
+const DEFAULT_LIMITED_PERMS = {groups:'view', roster:'view', programs:'none', tajweed:'none', honor:'none', reports:'view', announcements:'view', settings:'none', admins:'none'};
+const PERM_PRESETS = {
+  view:       {scope:'all', perms:{groups:'view',roster:'view',programs:'view',tajweed:'view',honor:'view',reports:'view',announcements:'view',settings:'none',admins:'none'}, canDelete:false, seeContact:false, seeStudentPass:false, canViewCreds:false},
+  groupAdmin: {scope:'own', perms:{groups:'edit',roster:'view',programs:'view',tajweed:'none',honor:'none',reports:'view',announcements:'view',settings:'none',admins:'none'}, canDelete:false, seeContact:true, seeStudentPass:false, canViewCreds:false},
+  noDelete:   {scope:'all', perms:{groups:'edit',roster:'edit',programs:'edit',tajweed:'edit',honor:'edit',reports:'edit',announcements:'edit',settings:'view',admins:'none'}, canDelete:false, seeContact:true, seeStudentPass:false, canViewCreds:false}
+};
+function applyPermPreset(name){
+  const p = PERM_PRESETS[name]; if(!p) return;
+  document.getElementById('apScope').value = p.scope;
+  PERM_SECTIONS.forEach(([k])=>{ document.getElementById('ap_'+k).value = p.perms[k]; });
+  document.getElementById('apDel').checked = p.canDelete;
+  document.getElementById('apContact').checked = p.seeContact;
+  document.getElementById('apPass').checked = p.seeStudentPass;
+  document.getElementById('apCreds').checked = p.canViewCreds;
+}
+function submitAdminPerms(){
+  const id = document.getElementById('apId').value;
+  const a = ADMINS.find(x=>x.id===id); if(!a || !canEditAdminPerms(a)) return toast('ما عندك صلاحية');
+  const role = document.getElementById('apRole').value;
+  if(role==='full' && !isMainAdmin()) return toast('تعيين مسؤول كبير للمشرف الرئيسي فقط');
+  const perms = {}; PERM_SECTIONS.forEach(([k])=>{ perms[k] = document.getElementById('ap_'+k).value; });
+  const scope = document.getElementById('apScope').value;
+  const groupIds = Array.from(document.querySelectorAll('.apGrp:checked')).map(x=>x.value);
+  if(role==='limited' && scope!=='all' && !groupIds.length && !confirm('ما اخترت أي مجموعة — هذا المسؤول ما رح يشوف أي طالب. متابعة؟')) return;
+  const upd = {role, perms, scope, groupIds, canDelete:document.getElementById('apDel').checked, seeContact:document.getElementById('apContact').checked, seeStudentPass:document.getElementById('apPass').checked, canViewCreds:document.getElementById('apCreds').checked};
+  db.collection('admins').doc(id).update(upd).then(()=>{ closeModal(); toast('تم حفظ الصلاحيات'); });
+}
+function submitAdminProfile(){
+  const id = document.getElementById('apfId').value;
+  const g = x=>document.getElementById(x).value.trim();
+  const profile = {fullName:g('apfName'), title:g('apfTitle'), phone:g('apfPhone'), address:g('apfAddr'), dob:g('apfDob'), hireDate:g('apfHire'), notes:g('apfNotes')};
+  db.collection('admins').doc(id).update({profile}).then(()=>{ closeModal(); toast('تم حفظ الملف الشخصي'); });
+}
 function setAdminCredPerm(id, val){
-  if(!isMainAdmin()) return toast('هذه الصلاحية للمشرف الرئيسي فقط');
+  if(!isSuper()) return toast('هذه الصلاحية للمشرف الرئيسي أو المسؤول الكبير فقط');
   db.collection('admins').doc(id).update({canViewCreds: !!val}).then(()=>toast('تم تحديث الصلاحية'));
 }
 
@@ -1114,10 +1400,10 @@ function rosterListInnerHTML(){
     const g = GROUPS.find(gr=>gr.id===s.groupId);
     return `<tr>
       <td><b>${esc(s.fullName||s.name)}</b></td>
-      <td>${esc(s.dob||'—')}</td>
+      <td>${ctx(s.dob)}</td>
       <td>${esc(s.joinDate||'—')}</td>
-      <td style="direction:ltr;text-align:right;">${esc(s.phone||'—')}</td>
-      <td>${esc(s.address||'—')}</td>
+      <td style="direction:ltr;text-align:right;">${ctx(s.phone)}</td>
+      <td>${ctx(s.address)}</td>
       <td>${g? esc(g.name) : '<span class="mini-note">غير منتسب لمجموعة</span>'}</td>
       <td style="white-space:nowrap;">
         <button class="btn btn-ghost btn-sm" onclick="openStudent('${s.id}')">تعديل</button>
@@ -1138,7 +1424,7 @@ function rosterListInnerHTML(){
 }
 function refreshRosterList(){
   const wrap = document.getElementById('rosterListWrap');
-  if(wrap) wrap.innerHTML = rosterListInnerHTML();
+  if(wrap){ wrap.innerHTML = rosterListInnerHTML(); lockIf(wrap, canEditSec('roster')); }
 }
 function unassignStudent(id,name){
   if(!confirm(`إزالة "${name}" من هذه المجموعة؟ بيضل موجود بالكشف العام ويقدر ينضم لمجموعة تانية لاحقًا.`)) return;
@@ -1185,7 +1471,7 @@ function programDetailHTML(id){
   const rows = studs.map(s=>{
     const g = GROUPS.find(gr=>gr.id===s.groupId);
     const mem = programMemorizedNames(s,id);
-    return `<tr><td><b>${esc(s.fullName||s.name)}</b></td><td>${g?esc(g.name):'—'}</td><td style="direction:ltr;text-align:right;">${esc(s.phone||'—')}</td><td>${mem.length? esc(mem.join('، ')) : '<span class="mini-note">—</span>'}</td></tr>`;
+    return `<tr><td><b>${esc(s.fullName||s.name)}</b></td><td>${g?esc(g.name):'—'}</td><td style="direction:ltr;text-align:right;">${ctx(s.phone)}</td><td>${mem.length? esc(mem.join('، ')) : '<span class="mini-note">—</span>'}</td></tr>`;
   }).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--ink-400);padding:20px;">لا يوجد طلاب مسجّلين بهذا البرنامج بعد</td></tr>`;
   return `
     <div class="breadcrumb"><span onclick="currentProgramId=null;render();">البرامج والدورات</span> ← ${esc(programLabel(p))}</div>
@@ -1198,10 +1484,40 @@ function programDetailHTML(id){
       </div>
     </div>
     <p class="mini-note" style="margin-bottom:12px;">كشف التسميع النهائي صار خاص بكل مجموعة على حدة — افتحه من داخل صفحة كل مجموعة.</p>
+    ${extraDaysSectionHTML(p)}
     <div class="card" style="padding:16px 18px;overflow-x:auto;">
       <table><thead><tr><th>الطالب</th><th>المجموعة</th><th>الهاتف</th><th>ما حفظه في هذه الدورة</th></tr></thead><tbody>${rows}</tbody></table>
     </div>
   `;
+}
+function extraDaysSectionHTML(p){
+  const list = ((p.extraDates||[]).slice()).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const rows = list.map(x=>`<tr><td>${esc(x.date)}</td><td>${dayNameOf(x.date)}</td><td>${esc(x.note||'')}</td><td><button class="btn btn-danger btn-sm" onclick="removeExtraDay('${p.id}','${x.date}')">حذف</button></td></tr>`).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--ink-400);padding:12px;">لا توجد أيام إضافية</td></tr>`;
+  return `
+    <h2 class="section-title" style="margin-top:0;">➕ أيام دوام إضافية (حالات استثنائية)</h2>
+    <p class="mini-note" style="margin-bottom:8px;">أيام خارج الأيام المحددة للنادي (مثل تعويض يوم أو دوام استثنائي). بتظهر تلقائيًا بجدول الحضور والتسميع لكل المجموعات.</p>
+    <div class="toolbar" data-write="1">
+      <input type="date" id="exDate" style="width:auto;">
+      <input id="exNote" placeholder="سبب / ملاحظة (اختياري)" style="max-width:260px;">
+      <button class="btn btn-primary btn-sm" onclick="addExtraDay('${p.id}')">+ إضافة يوم</button>
+    </div>
+    <div class="card" style="padding:10px 14px;overflow-x:auto;margin-bottom:18px;"><table class="compact"><thead><tr><th>التاريخ</th><th>اليوم</th><th>ملاحظة</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function addExtraDay(pid){
+  const p = PROGRAMS.find(x=>x.id===pid); if(!p) return;
+  const date = document.getElementById('exDate').value;
+  const note = document.getElementById('exNote').value.trim();
+  if(!date) return toast('اختر تاريخ اليوم');
+  if(programSessionDates(p).includes(date)) return toast('هذا اليوم موجود أصلًا ضمن أيام الدوام');
+  const extraDates = [...(p.extraDates||[]), {date, note}];
+  db.collection('programs').doc(pid).update({extraDates}).then(()=>toast('تمت إضافة اليوم'));
+}
+function removeExtraDay(pid, date){
+  const p = PROGRAMS.find(x=>x.id===pid); if(!p) return;
+  const used = STUDENTS.some(s=>{ const r = (((s.attendance||{})[pid])||{})[date]; return r && (r.status || r.surah || r.notes || r.signature); });
+  if(!confirm(used ? 'هذا اليوم فيه بيانات حضور/تسميع مسجّلة. إزالته من القائمة ما بتحذف البيانات من سجلات الطلاب، بس بيختفي من الجداول. متابعة؟' : 'حذف هذا اليوم الإضافي؟')) return;
+  const extraDates = (p.extraDates||[]).filter(x=>x.date!==date);
+  db.collection('programs').doc(pid).update({extraDates}).then(()=>toast('تم الحذف'));
 }
 function isWinterSummer(p){ return p.type==='النادي الشتوي' || p.type==='النادي الصيفي'; }
 function deleteProgram(id){
@@ -1236,6 +1552,7 @@ function announcementsPageHTML(){
 function deleteAnnouncement(id){
   if(!confirm('حذف هذا الإعلان؟')) return;
   db.collection('announcements').doc(id).delete();
+  NOTIFS.filter(n=>n.refId===id).forEach(n=>db.collection('notifications').doc(n.id).delete());
 }
 
 /* ---------------------------------------------------------
@@ -1268,6 +1585,7 @@ function openStudent(id){
   editingStudentId = id; surahFilter=''; currentAttendanceProgram = null;
   document.getElementById('modalOverlay').classList.remove('hidden');
   document.getElementById('modalBody').innerHTML = studentEditorHTML(id);
+  relockStudent(document.getElementById('modalBody'));
 }
 let currentAttendanceProgram = null;
 
@@ -1286,20 +1604,20 @@ function studentEditorHTML(id){
     </div>
     <div class="row2" style="margin-bottom:14px;">
       <div class="field"><label>الاسم الرباعي</label><input value="${esc(st.fullName||st.name)}" onchange="updateStudentField('${id}','fullName',this.value);updateStudentField('${id}','name',this.value);"></div>
-      <div class="field"><label>كلمة السر</label><input value="${esc(st.password)}" onchange="updateStudentField('${id}','password',this.value)" style="direction:ltr;text-align:left;"></div>
+      <div class="field"><label>كلمة السر</label><input value="${canSeeStudentPass()?esc(st.password):''}" ${canSeeStudentPass()?'':'disabled placeholder="مخفي"'} onchange="updateStudentField('${id}','password',this.value)" style="direction:ltr;text-align:left;"></div>
     </div>
     <div class="row2" style="margin-bottom:14px;">
       <div class="field"><label>الجنس</label><select onchange="updateStudentField('${id}','gender',this.value)">
         <option value="m" ${(st.gender||'m')==='m'?'selected':''}>ذكر</option>
         <option value="f" ${st.gender==='f'?'selected':''}>أنثى</option>
       </select></div>
-      <div class="field"><label>تاريخ الميلاد</label><input type="date" value="${st.dob||''}" onchange="updateStudentField('${id}','dob',this.value)"></div>
+      <div class="field"><label>تاريخ الميلاد</label><input type="date" value="${canSeeContact()?(st.dob||''):''}" ${canSeeContact()?'':'disabled'} onchange="updateStudentField('${id}','dob',this.value)"></div>
     </div>
     <div class="row2" style="margin-bottom:14px;">
-      <div class="field"><label>رقم الهاتف</label><input value="${esc(st.phone||'')}" style="direction:ltr;text-align:left;" onchange="updateStudentField('${id}','phone',this.value)"></div>
+      <div class="field"><label>رقم الهاتف</label><input value="${canSeeContact()?esc(st.phone||''):''}" ${canSeeContact()?'':'disabled placeholder="مخفي"'} style="direction:ltr;text-align:left;" onchange="updateStudentField('${id}','phone',this.value)"></div>
       <div class="field"><label>تاريخ الانتساب</label><input type="date" value="${st.joinDate||''}" onchange="updateStudentField('${id}','joinDate',this.value)"></div>
     </div>
-    <div class="field" style="margin-bottom:14px;"><label>العنوان</label><input value="${esc(st.address||'')}" onchange="updateStudentField('${id}','address',this.value)"></div>
+    <div class="field" style="margin-bottom:14px;"><label>العنوان</label><input value="${canSeeContact()?esc(st.address||''):''}" ${canSeeContact()?'':'disabled placeholder="مخفي"'} onchange="updateStudentField('${id}','address',this.value)"></div>
     <div class="row2" style="margin-bottom:14px;">
       <div class="field"><label>الصف الدراسي (رقم)</label><input type="number" value="${st.grade??''}" onchange="updateStudentField('${id}','grade',Number(this.value)||null);maybeReassignGroup('${id}')"></div>
       <div class="field"><label>العمر</label><input type="number" value="${st.age??''}" onchange="updateStudentField('${id}','age',Number(this.value)||null);maybeReassignGroup('${id}')"></div>
@@ -1316,6 +1634,9 @@ function studentEditorHTML(id){
         ${PROGRAMS.map(pr=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:7px;font-size:14px;"><input type="checkbox" value="${pr.id}" ${myProgIds.includes(pr.id)?'checked':''} onchange="toggleStudentProgram('${id}','${pr.id}',this.checked)" style="width:auto;"> ${esc(programLabel(pr))}</label>`).join('') || '<span class="mini-note">لا توجد برامج مضافة بعد</span>'}
       </div>
     </div>
+
+    <h3 style="font-size:15px;color:var(--emerald-800);margin:20px 0 10px;">📝 ملاحظات للطالب (بتوصله كإشعار فوري)</h3>
+    <div id="studentNotesWrap">${studentNotesHTML(id)}</div>
 
     <h3 style="font-size:15px;color:var(--emerald-800);margin:20px 0 10px;">📅 الحضور والغياب</h3>
     <div id="attendanceSection">${attendanceSectionHTML(id)}</div>
@@ -1378,6 +1699,7 @@ function refreshSurahTable(id){
   const inner = wrap.querySelector('.surah-scroll');
   const scrollTop = inner? inner.scrollTop : 0;
   wrap.innerHTML = surahTableInnerHTML(id);
+  relockStudent(wrap);
   const inner2 = wrap.querySelector('.surah-scroll');
   if(inner2) inner2.scrollTop = scrollTop;
 }
@@ -1398,7 +1720,11 @@ function updateSurah(studentId, num, field, value){
     }
   }
   surahs[num]=rec;
+  const sinfo = SURAHS[num-1];
+  const stLabel = rec.status==='memorized' ? 'محفوظة ✓' : rec.status==='in_progress' ? `قيد الحفظ (وصل للآية ${rec.ayah||0})` : 'لم يبدأ';
+  const changed = field==='status' || field==='grade' || (field==='ayah' && rec.status==='in_progress');
   db.collection('students').doc(studentId).update({surahs}).then(()=>{
+    if(changed) notifyProgress(studentId, [{key:'s'+num, text:`${sinfo.name}: ${stLabel}${rec.grade?' — '+rec.grade:''}`}]);
     if(editingStudentId===studentId) refreshSurahTable(studentId);
   });
 }
@@ -1441,6 +1767,24 @@ function attendanceSectionHTML(id){
 const DAY_NAMES = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
 function dayNameOf(d){ return DAY_NAMES[new Date(d+'T00:00:00').getDay()]; }
 
+/* كل يوم دوام يقدر يحتوي أكثر من سورة: الأولى بالحقول الأساسية (للتوافق مع البيانات القديمة) والباقي بمصفوفة extra */
+function entryOf(rec, idx){
+  rec = rec || {};
+  if(idx===0) return {surah:rec.surah||'', from:rec.from||'', to:rec.to||'', grade:rec.grade||'', finished:!!rec.finished};
+  return (rec.extra||[])[idx-1] || {};
+}
+function dayEntries(rec){ rec = rec||{}; return [entryOf(rec,0), ...(rec.extra||[])]; }
+function dayEntriesFilled(rec){ return dayEntries(rec).filter(e=>e && e.surah); }
+function entryCompleted(e){
+  const info = SURAHS[(Number(e.surah)||0)-1]; if(!info) return false;
+  const to = Number(e.to)||0;
+  return e.finished===true || (to>0 && to>=info.ayahs);
+}
+function fmtEntry(e){
+  const info = SURAHS[(Number(e.surah)||0)-1]; if(!info) return '';
+  return info.name + ((e.from||e.to)? ` (${e.from||'؟'}–${e.to||'؟'})` : '') + (e.finished? ' ✓ ختمها' : '') + (e.grade? ' — '+e.grade : '');
+}
+
 /* يطبّق تسميع يوم على سجل السور: أُنهيت السورة => محفوظة + تقدير + تاريخ ودورة، وإلا => قيد الحفظ */
 function applyRecitationToSurahs(surahsIn, rec, programId, date){
   const surahs = {...(surahsIn||{})};
@@ -1448,9 +1792,14 @@ function applyRecitationToSurahs(surahsIn, rec, programId, date){
   const info = SURAHS[num-1];
   if(!num || !info) return surahs;
   const to = Number(rec.to)||0;
-  const completed = rec.finished===true || (to>0 && to>=info.ayahs);
+  const completed = entryCompleted(rec);
   const ex = surahs[num] || {status:'not_started', ayah:0, grade:''};
   if(completed){
+    /* سورة محفوظة سابقًا بتاريخ أقدم (مراجعة): نحافظ على تاريخ ودورة الحفظ الأصلي */
+    if(ex.status==='memorized' && ex.completedDate && ex.completedDate!==date){
+      if(!ex.grade && rec.grade) surahs[num] = {...ex, grade: rec.grade};
+      return surahs;
+    }
     surahs[num] = {...ex, status:'memorized', ayah:info.ayahs, grade: rec.grade || ex.grade || '', completedDate: date, programId: programId};
   } else if(ex.status!=='memorized'){
     surahs[num] = {...ex, status:'in_progress', ayah: Math.max(Number(ex.ayah)||0, to), grade: rec.grade || ex.grade || ''};
@@ -1468,22 +1817,32 @@ function saveSession(studentId, programId, date, patch){
   const rec = {...prev, ...patch};
   attendance[programId][date] = rec;
   const update = {attendance};
-  const touched = ['surah','from','to','grade','finished'].some(k=>k in patch);
+  let progItems = null;
+  const touched = ['surah','from','to','grade','finished','extra'].some(k=>k in patch);
   if(touched){
     let surahs = {...(st.surahs||{})};
-    const pnum = Number(prev.surah)||0;
-    if(pnum && pnum !== (Number(rec.surah)||0)){
-      const ex = surahs[pnum];
+    const prevEntries = dayEntriesFilled(prev), newEntries = dayEntriesFilled(rec);
+    /* تراجع عن أي سورة اعتُبرت محفوظة من هذا اليوم ولم تعد كذلك بعد التعديل */
+    prevEntries.forEach(pe=>{
+      const num = Number(pe.surah);
+      const ex = surahs[num];
       if(ex && ex.status==='memorized' && ex.completedDate===date && ex.programId===programId){
-        surahs[pnum] = {...ex, status:'in_progress', ayah:Math.max(0,(Number(prev.from)||1)-1), completedDate:null, programId:null};
+        const still = newEntries.some(ne=>Number(ne.surah)===num && entryCompleted(ne));
+        if(!still) surahs[num] = {...ex, status:'in_progress', ayah:Math.max(0,(Number(pe.from)||1)-1), completedDate:null, programId:null};
       }
-    }
-    if(rec.surah) surahs = applyRecitationToSurahs(surahs, rec, programId, date);
+    });
+    newEntries.forEach(ne=>{ surahs = applyRecitationToSurahs(surahs, ne, programId, date); });
     update.surahs = surahs;
+    if(JSON.stringify(prevEntries)!==JSON.stringify(newEntries)){
+      progItems = newEntries.map(ne=>({key:'s'+ne.surah, text:`تسميع ${date}: ${fmtEntry(ne)}${entryCompleted(ne)?' — تم حفظها ✓':''}`}));
+    }
   }
   const ids = studentProgramIds(st);
   if(!ids.includes(programId)) update.programIds = [...ids, programId];
-  return db.collection('students').doc(studentId).update(update);
+  return db.collection('students').doc(studentId).update(update).then(r=>{ if(progItems && progItems.length) notifyProgress(studentId, progItems); return r; });
+}
+function afterSessionSave(stId){
+  if(editingStudentId===stId){ refreshAttendanceTable(stId); refreshSurahTable(stId); }
 }
 function saveSessionField(stId, pid, date, field, value){
   const st = STUDENTS.find(s=>s.id===stId); if(!st) return;
@@ -1500,26 +1859,69 @@ function saveSessionField(stId, pid, date, field, value){
   } else {
     patch[field] = value;
   }
-  saveSession(stId, pid, date, patch).then(()=>{
-    if(editingStudentId===stId){ refreshAttendanceTable(stId); refreshSurahTable(stId); }
-  });
+  saveSession(stId, pid, date, patch).then(()=>afterSessionSave(stId));
+}
+function saveEntryField(stId, pid, date, idx, field, value){
+  if(idx===0) return saveSessionField(stId, pid, date, field, value);
+  const st = STUDENTS.find(s=>s.id===stId); if(!st) return;
+  const rec = (((st.attendance||{})[pid])||{})[date] || {};
+  const extra = (rec.extra||[]).map(x=>({...x}));
+  const e = extra[idx-1]; if(!e) return;
+  if(field==='surah'){ e.surah = Number(value)||''; e.from=''; e.to=''; e.finished=false; }
+  else if(field==='from' || field==='to'){
+    let v = Number(value)||0; const sn = Number(e.surah)||0;
+    if(sn && v>SURAHS[sn-1].ayahs) v = SURAHS[sn-1].ayahs;
+    e[field] = v||'';
+  } else if(field==='finished'){ e.finished = !!value; }
+  else e[field] = value;
+  saveSession(stId, pid, date, {extra}).then(()=>afterSessionSave(stId));
+}
+function addExtraEntry(stId, pid, date){
+  const st = STUDENTS.find(s=>s.id===stId); if(!st) return;
+  const rec = (((st.attendance||{})[pid])||{})[date] || {};
+  const extra = [...(rec.extra||[]), {surah:'', from:'', to:'', grade:'', finished:false}];
+  saveSession(stId, pid, date, {extra}).then(()=>afterSessionSave(stId));
+}
+function removeExtraEntry(stId, pid, date, idx){
+  const st = STUDENTS.find(s=>s.id===stId); if(!st) return;
+  const rec = (((st.attendance||{})[pid])||{})[date] || {};
+  const e = (rec.extra||[])[idx-1];
+  if(e && e.surah && !confirm('حذف هذه السورة من تسميع هذا اليوم؟ (إذا كانت حُسبت محفوظة بهذا اليوم، بترجع قيد الحفظ)')) return;
+  const extra = (rec.extra||[]).filter((_,i)=>i!==idx-1);
+  saveSession(stId, pid, date, {extra}).then(()=>afterSessionSave(stId));
+}
+/* خلايا السورة/من/إلى/التقدير/ختمها — لسطر تسميع واحد (الأساسي أو إضافي) */
+function entryCellsHTML(stId, pid, date, idx, e, fk){
+  const call = (f,expr)=>`saveEntryField('${stId}','${pid}','${date}',${idx},'${f}',${expr})`;
+  const surahOpts = `<option value="">—</option>` + SURAHS.map(s=>`<option value="${s.num}" ${Number(e.surah)===s.num?'selected':''}>${s.name}</option>`).join('');
+  const btn = idx===0
+    ? `<button class="btn btn-ghost btn-sm" style="padding:1px 7px;" title="إضافة سورة أخرى لنفس اليوم" onclick="addExtraEntry('${stId}','${pid}','${date}')">＋</button>`
+    : `<button class="btn btn-danger btn-sm" style="padding:1px 7px;" title="حذف هذه السورة" onclick="removeExtraEntry('${stId}','${pid}','${date}',${idx})">✕</button>`;
+  return `
+    <td><select data-fk="${fk}:surah" class="mini-input" style="min-width:96px;" onchange="${call('surah','this.value')}">${surahOpts}</select></td>
+    <td><input data-fk="${fk}:from" type="number" min="1" class="mini-input" style="width:64px;" value="${e.from||''}" placeholder="من" onchange="${call('from','this.value')}"></td>
+    <td><input data-fk="${fk}:to" type="number" min="1" class="mini-input" style="width:64px;" value="${e.to||''}" placeholder="إلى" onchange="${call('to','this.value')}"></td>
+    <td><select data-fk="${fk}:grade" class="mini-input" onchange="${call('grade','this.value')}"><option value="">—</option>${GRADES.map(g=>`<option value="${g}" ${e.grade===g?'selected':''}>${g}</option>`).join('')}</select></td>
+    <td style="text-align:center;white-space:nowrap;"><input data-fk="${fk}:fin" type="checkbox" style="width:auto;" ${e.finished?'checked':''} title="ختم السورة" onchange="${call('finished','this.checked')}"> ${btn}</td>`;
 }
 /* خلايا التسميع المشتركة بين جدول الطالب والجدول اليومي للمجموعة */
 function sessionCellsHTML(stId, pid, date, rec, fk, withNotes){
   const call = (f,expr)=>`saveSessionField('${stId}','${pid}','${date}','${f}',${expr})`;
-  const surahOpts = `<option value="">—</option>` + SURAHS.map(s=>`<option value="${s.num}" ${Number(rec.surah)===s.num?'selected':''}>${s.name}</option>`).join('');
   return `
     <td><select data-fk="${fk}:status" onchange="${call('status','this.value')}">
       <option value="">—</option>
       <option value="present" ${rec.status==='present'?'selected':''}>حاضر</option>
       <option value="absent" ${rec.status==='absent'?'selected':''}>غائب</option>
     </select></td>
-    <td><select data-fk="${fk}:surah" class="mini-input" style="min-width:96px;" onchange="${call('surah','this.value')}">${surahOpts}</select></td>
-    <td><input data-fk="${fk}:from" type="number" min="1" class="mini-input" style="width:64px;" value="${rec.from||''}" placeholder="من" onchange="${call('from','this.value')}"></td>
-    <td><input data-fk="${fk}:to" type="number" min="1" class="mini-input" style="width:64px;" value="${rec.to||''}" placeholder="إلى" onchange="${call('to','this.value')}"></td>
-    <td><select data-fk="${fk}:grade" class="mini-input" onchange="${call('grade','this.value')}"><option value="">—</option>${GRADES.map(g=>`<option value="${g}" ${rec.grade===g?'selected':''}>${g}</option>`).join('')}</select></td>
-    <td style="text-align:center;"><input data-fk="${fk}:fin" type="checkbox" style="width:auto;" ${rec.finished?'checked':''} title="ختم السورة" onchange="${call('finished','this.checked')}"></td>
+    ${entryCellsHTML(stId, pid, date, 0, entryOf(rec,0), fk)}
     ${withNotes? `<td><input data-fk="${fk}:notes" class="mini-input" style="min-width:120px;" value="${esc(rec.notes||'')}" placeholder="ملاحظات" onchange="${call('notes','this.value')}"></td>` : ''}`;
+}
+/* صفوف السور الإضافية تحت صف اليوم (trail = عدد الأعمدة بعد خلية "ختمها") */
+function extraRowsHTML(stId, pid, date, rec, fk, trail){
+  return (rec.extra||[]).map((e,i)=>{
+    const idx = i+1;
+    return `<tr class="sub-row"><td class="mini-note" style="text-align:left;">↳ سورة إضافية</td><td></td>${entryCellsHTML(stId, pid, date, idx, e, fk+':x'+idx)}${'<td></td>'.repeat(trail)}</tr>`;
+  }).join('');
 }
 const SESSION_HEAD = '<th>الحضور</th><th>السورة</th><th>من آية</th><th>إلى آية</th><th>التقدير</th><th>ختمها</th>';
 
@@ -1533,11 +1935,11 @@ function attendanceTableInnerHTML(id, programId){
   const rows = dates.map(d=>{
     const rec = att[d] || {};
     return `<tr>
-      <td style="white-space:nowrap;">${d}<div class="mini-note">${dayNameOf(d)}</div></td>
+      <td style="white-space:nowrap;">${d}<div class="mini-note">${dayNameOf(d)}${isExtraDay(p,d)?' · يوم إضافي':''}</div></td>
       ${sessionCellsHTML(id, programId, d, rec, 'a:'+d, false)}
       <td><input class="mini-input" style="min-width:110px;" value="${esc(rec.signature||'')}" placeholder="توقيع المعلم" onchange="saveSessionField('${id}','${programId}','${d}','signature',this.value)"></td>
       <td><input class="mini-input" style="min-width:120px;" value="${esc(rec.notes||'')}" placeholder="ملاحظات" onchange="saveSessionField('${id}','${programId}','${d}','notes',this.value)"></td>
-    </tr>`;
+    </tr>${extraRowsHTML(id, programId, d, rec, 'a:'+d, 2)}`;
   }).join('');
   return `
     <div class="att-scroll" style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:8px;">
@@ -1555,6 +1957,7 @@ function refreshAttendanceTable(id){
   const scrollTop = inner? inner.scrollTop : 0;
   const scrollLeft = inner? inner.scrollLeft : 0;
   wrap.innerHTML = attendanceTableInnerHTML(id, currentAttendanceProgram);
+  relockStudent(wrap);
   const inner2 = wrap.querySelector('.att-scroll');
   if(inner2){ inner2.scrollTop = scrollTop; inner2.scrollLeft = scrollLeft; }
 }
@@ -1723,7 +2126,8 @@ function openModal(kind, arg){
       <div class="field"><label>الاسم (للعرض)</label><input id="naName"></div>
       <div class="field"><label>اسم المستخدم (للدخول)</label><input id="naUser" style="direction:ltr;text-align:left;"></div>
       <div class="field"><label>كلمة السر</label><input id="naPass" style="direction:ltr;text-align:left;"></div>
-      ${isMainAdmin()? `<label style="display:flex;align-items:center;gap:8px;font-weight:400;"><input type="checkbox" id="naPerm" style="width:auto;"> يقدر يشوف ويغيّر أسماء المستخدمين وكلمات السر للمسؤولين</label>` : ''}
+      ${isMainAdmin()? `<div class="field"><label>الدور</label><select id="naRole"><option value="limited">مسؤول محدود (حسب الصلاحيات)</option><option value="full">مسؤول كبير (صلاحية كاملة)</option></select></div>` : ''}
+      <p class="mini-note">المسؤول الجديد بيبدأ بصلاحيات اطلاع محدودة وبدون مجموعات. بعد الإضافة اضغط "الصلاحيات" جنب اسمه لتحديد مجموعاته وشو يشوف وشو يعدّل.</p>
       <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button>
       <button class="btn btn-primary" onclick="submitAdmin()">إضافة</button></div>`;
   }
@@ -1832,18 +2236,22 @@ function submitAnnouncement(){
   const text = document.getElementById('naeText').value.trim();
   if(!text) return toast('اكتب نص الإعلان');
   db.collection('announcements').add({title, text, createdAt:Date.now(), date:new Date().toISOString().slice(0,10)})
-    .then(()=>{closeModal();toast('تم النشر');});
+    .then(ref=>{
+      pushNotif({to:'all', type:'announcement', title: title || 'إعلان جديد من المركز', body: text.length>160? text.slice(0,160)+'…' : text, refId: ref && ref.id});
+      closeModal(); toast('تم النشر وأُرسل إشعار لكل الطلاب');
+    });
 }
 function submitAdmin(){
-  if(!canSeeCreds()){ toast('ما عندك صلاحية إضافة مسؤولين'); return; }
+  if(!canManageAdmins()){ toast('ما عندك صلاحية إضافة مسؤولين'); return; }
   const name = document.getElementById('naName').value.trim();
   const username = document.getElementById('naUser').value.trim();
   const pass = document.getElementById('naPass').value.trim();
   if(!name || !username || !pass) return toast('عبّي الاسم واسم المستخدم وكلمة السر');
   if(ADMINS.some(a=>adminUsername(a).toLowerCase()===username.toLowerCase())) return toast('اسم المستخدم مستخدم من قبل');
-  const perm = document.getElementById('naPerm');
-  const canViewCreds = perm ? perm.checked : false;
-  db.collection('admins').add({name, username, password:pass, canViewCreds, createdAt:Date.now()}).then(()=>{closeModal();toast('تمت الإضافة');});
+  const roleSel = document.getElementById('naRole');
+  const role = (roleSel && roleSel.value==='full' && isMainAdmin()) ? 'full' : 'limited';
+  db.collection('admins').add({name, username, password:pass, role, perms:{...DEFAULT_LIMITED_PERMS}, scope:'own', groupIds:[], canDelete:false, seeContact:false, seeStudentPass:false, canViewCreds:false, createdAt:Date.now()})
+    .then(()=>{closeModal();toast('تمت الإضافة — اضبط صلاحياته من زر "الصلاحيات"');});
 }
 function submitEditAdminCreds(){
   const id = document.getElementById('eaId').value;
@@ -1882,6 +2290,7 @@ function renderStudentView(){
   const sb = document.getElementById('sidebarNav');
   sb.innerHTML = `
     <div class="brand"><div class="dot"><img src="${LOGO_URI}" style="width:26px;height:26px;object-fit:contain;border-radius:4px;"></div><div><h2>مركز الإسراء</h2><span>سجل الحفظ</span></div></div>
+    <div class="navitem" onclick="openNotifications()">🔔 الإشعارات${unreadCount()? ` <span class="badge-n">${unreadCount()}</span>`:''}</div>
     <div class="spacer"></div>
     <div class="who"><b>${esc(session.name)}</b>وضع الاطلاع فقط</div>
     <div class="navitem" onclick="logout()">🚪 تسجيل خروج</div>
@@ -1916,8 +2325,7 @@ function renderStudentView(){
           : rec.status==='absent'
             ? '<span class="status-pill" style="background:#fbe4e2;color:var(--red-600);">غائب</span>'
             : '<span class="status-pill status-not">—</span>';
-        const sInfo = rec.surah ? SURAHS[Number(rec.surah)-1] : null;
-        const recit = sInfo ? (sInfo.name + ((rec.from||rec.to)? ` (${rec.from||'؟'}–${rec.to||'؟'})` : '') + (rec.finished? ' ✓ ختمها' : '') + (rec.grade? ' — '+rec.grade : '')) : '—';
+        const recit = dayEntriesFilled(rec).map(fmtEntry).join(' | ') || '—';
         return `<tr><td>${d}<div class="mini-note">${dayName}</div></td><td>${pill}</td><td>${esc(recit)}</td><td>${esc(rec.signature||'—')}</td><td>${esc(rec.notes||'—')}</td></tr>`;
       }).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--ink-400);padding:14px;">لسا ما تحدد تاريخ لهذه الدورة</td></tr>`;
       return `
@@ -1964,6 +2372,8 @@ function renderStudentView(){
       </div>
     </div>
 
+    ${unreadCount()? `<div class="card" style="padding:12px 18px;margin-bottom:14px;cursor:pointer;border-top:3px solid var(--emerald-600);" onclick="openNotifications()">🔔 <b>عندك ${unreadCount()} إشعار جديد</b> — اضغط للعرض</div>` : ''}
+    ${myNotesViewHTML(st.id)}
     ${p.done>=114 ? `<div class="card" style="padding:14px 18px;margin-bottom:16px;border-top:3px solid var(--gold-500);">🏅 <b>ما شاء الله، ختمتَ القرآن الكريم كاملًا</b> — اسمك في قائمة الشرف.</div>` : ''}
     ${attendanceViewHTML? `<h2 class="serif" style="font-size:17px;color:var(--emerald-800);">📅 الحضور والغياب والتسميع</h2>${attendanceViewHTML}` : ''}
 
@@ -2201,7 +2611,7 @@ function studentSessionsForSurah(s, num){
   Object.keys(s.attendance||{}).forEach(pid=>{
     Object.keys(s.attendance[pid]||{}).sort().forEach(d=>{
       const r = s.attendance[pid][d];
-      if(r && Number(r.surah)===num) out.push(`${d}: ${r.from||'؟'}–${r.to||'؟'}${r.finished?' ✓':''} (${esc(progLabelById(pid))})`);
+      dayEntriesFilled(r).forEach(e=>{ if(Number(e.surah)===num) out.push(`${d}: ${e.from||'؟'}–${e.to||'؟'}${e.finished?' ✓':''} (${esc(progLabelById(pid))})`); });
     });
   });
   return out;
@@ -2228,7 +2638,7 @@ function historyResultsHTML(){
     if(!p) return hint('اختر دورة/نادي لعرض ما حفظه كل الطلاب فيها.');
     const rows = STUDENTS.filter(s=>studentInProgram(s,p.id)).sort(byName).map(s=>{
       const mem=[]; SURAHS.forEach(x=>{ const r=(s.surahs||{})[x.num]; if(r && r.status==='memorized' && r.programId===p.id) mem.push(`${x.name} (${esc(r.completedDate||'—')}${r.grade?' — '+esc(r.grade):''})`); });
-      const days = Object.keys(((s.attendance||{})[p.id])||{}).filter(d=>{const r=s.attendance[p.id][d]; return r&&r.surah;}).length;
+      const days = Object.keys(((s.attendance||{})[p.id])||{}).filter(d=>dayEntriesFilled(s.attendance[p.id][d]).length>0).length;
       return `<tr><td>${esc(s.fullName||s.name)}</td><td>${mem.join('، ')||'—'}</td><td>${days}</td></tr>`;
     });
     return `<div style="overflow-x:auto;"><table class="compact"><thead><tr><th>الطالب</th><th>السور التي حفظها في ${esc(programLabel(p))}</th><th>أيام التسميع</th></tr></thead><tbody>${rows.join('')||`<tr><td colspan="3" style="text-align:center;">لا يوجد طلاب</td></tr>`}</tbody></table></div>`;
@@ -2298,11 +2708,11 @@ function deleteHonor(id){
    ========================================================= */
 function seedTajweedIfNeeded(){
   if(!dataReady || SETTINGS.tajweedSeeded || TAJ_LEVELS.length) return;
-  const b = db.batch();
+  const b = RAWDB.batch();
   ['المستوى الأول','المستوى الثاني','المستوى الثالث'].forEach((n,i)=>{
-    b.set(db.collection('tajweedLevels').doc('lvl'+(i+1)), {name:n, order:i+1, createdAt:Date.now()+i}, {merge:true});
+    b.set(RAWDB.collection('tajweedLevels').doc('lvl'+(i+1)), {name:n, order:i+1, createdAt:Date.now()+i}, {merge:true});
   });
-  b.set(db.collection('settings').doc('center'), {tajweedSeeded:true}, {merge:true});
+  b.set(RAWDB.collection('settings').doc('center'), {tajweedSeeded:true}, {merge:true});
   b.commit().catch(()=>{});
 }
 function tajStudents(){ return STUDENTS.filter(s=>s.inTajweed===true).sort(byName); }
@@ -2327,7 +2737,7 @@ function tajAddResultsHTML(){
   if(!res.length) return '<p class="mini-note">لا نتائج (أو الطالب موجود أصلًا بالشعبة).</p>';
   return res.map(s=>{ const g=GROUPS.find(x=>x.id===s.groupId); return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);"><span><b>${esc(s.fullName||s.name)}</b> <span class="mini-note">${g?esc(g.name):'بدون مجموعة'}</span></span><button class="btn btn-primary btn-sm" onclick="tajAdd('${s.id}')">+ إضافة للتجويد</button></div>`; }).join('');
 }
-function refreshTajTable(){ const w=document.getElementById('tajTableWrap'); if(w) w.innerHTML = tajTableInnerHTML(); }
+function refreshTajTable(){ const w=document.getElementById('tajTableWrap'); if(w){ w.innerHTML = tajTableInnerHTML(); lockIf(w, canEditSec('tajweed')); } }
 function refreshTajAdd(){ const w=document.getElementById('tajAddWrap'); if(w) w.innerHTML = tajAddResultsHTML(); }
 function tajweedPageHTML(){
   if(!TAJ_LEVELS.length){
@@ -2457,17 +2867,17 @@ function buildReportInner(type, p){
   if(type==='roster'){
     const list = STUDENTS.filter(s=>(s.gender||'m')===p.gender).sort(byName);
     return R('كشف الأسماء العام — '+genderLabel(p.gender),
-      rpTable(['#','الاسم الرباعي','تاريخ الميلاد','تاريخ الانتساب','الهاتف','العنوان','المجموعة الحالية'], list.map((s,i)=>[i+1,sn(s),esc(s.dob||''),esc(s.joinDate||''),esc(s.phone||''),esc(s.address||''),esc(groupNameById(s.groupId))]),'الكشف العام'), 'الكشف-العام-'+genderLabel(p.gender), 'landscape');
+      rpTable(['#','الاسم الرباعي','تاريخ الميلاد','تاريخ الانتساب','الهاتف','العنوان','المجموعة الحالية'], list.map((s,i)=>[i+1,sn(s),ctt(s.dob),esc(s.joinDate||''),ctt(s.phone),ctt(s.address),esc(groupNameById(s.groupId))]),'الكشف العام'), 'الكشف-العام-'+genderLabel(p.gender), 'landscape');
   }
   if(type==='studentCard'){
     const s = STUDENTS.find(x=>x.id===p.sid); if(!s) return R('سجل طالب','<p>لا يوجد</p>');
     const g = GROUPS.find(x=>x.id===s.groupId); const pr = studentProgress(s);
-    const info = rpKV([['الاسم الرباعي',sn(s)],['الجنس',(s.gender||'m')==='f'?'أنثى':'ذكر'],['تاريخ الميلاد',esc(s.dob||'')],['تاريخ الانتساب',esc(s.joinDate||'')],['الهاتف',esc(s.phone||'')],['العنوان',esc(s.address||'')],['المدرسة',esc(s.school||'')],['الصف / العمر',`${esc(s.grade||'')} / ${esc(s.age||'')}`],['المجموعة',g?esc(g.name):'—'],['المعلم/ة',g&&g.teacherName?esc(g.teacherName):'—'],['الدورات',studentProgramIds(s).map(id=>esc(progLabelById(id))).filter(x=>x).join('، ')||'—'],['المحفوظ',`${pr.done} / 114 (${pr.pct}%)`]],'معلومات الطالب');
+    const info = rpKV([['الاسم الرباعي',sn(s)],['الجنس',(s.gender||'m')==='f'?'أنثى':'ذكر'],['تاريخ الميلاد',ctt(s.dob)],['تاريخ الانتساب',esc(s.joinDate||'')],['الهاتف',ctt(s.phone)],['العنوان',ctt(s.address)],['المدرسة',esc(s.school||'')],['الصف / العمر',`${esc(s.grade||'')} / ${esc(s.age||'')}`],['المجموعة',g?esc(g.name):'—'],['المعلم/ة',g&&g.teacherName?esc(g.teacherName):'—'],['الدورات',studentProgramIds(s).map(id=>esc(progLabelById(id))).filter(x=>x).join('، ')||'—'],['المحفوظ',`${pr.done} / 114 (${pr.pct}%)`]],'معلومات الطالب');
     const mrows=[]; SURAHS.forEach(x=>{ const r=(s.surahs||{})[x.num]; if(r && r.status && r.status!=='not_started') mrows.push([x.num,x.name,r.status==='memorized'?'محفوظة':`قيد الحفظ (آية ${r.ayah||0})`,esc(r.grade||''),esc(r.completedDate||''),esc(progLabelById(r.programId))]); });
     let att='';
     studentProgramIds(s).forEach(pid=>{
       const pg=PROGRAMS.find(x=>x.id===pid); if(!pg) return;
-      const rows = programSessionDates(pg).map(d=>{ const r=(((s.attendance||{})[pid])||{})[d]||{}; return [d,dayNameOf(d),statusTxt(r.status),r.surah?esc(surahName(r.surah)):'',r.from||'',r.to||'',esc(r.grade||''),r.finished?'✓':'',esc(r.signature||''),esc(r.notes||'')]; });
+      const rows = programSessionDates(pg).map(d=>{ const r=(((s.attendance||{})[pid])||{})[d]||{}; const en=dayEntriesFilled(r); const J=f=>en.map(f).join('<br>'); return [d,dayNameOf(d),statusTxt(r.status),J(e=>esc(surahName(e.surah))),J(e=>e.from||''),J(e=>e.to||''),J(e=>esc(e.grade||'')),J(e=>e.finished?'✓':''),esc(r.signature||''),esc(r.notes||'')]; });
       att += `<h3>الحضور والتسميع — ${esc(programLabel(pg))}</h3>` + rpTable(['التاريخ','اليوم','الحضور','السورة','من','إلى','التقدير','ختمها','التوقيع','ملاحظات'],rows,'حضور '+programLabel(pg),'compact');
     });
     return R('سجل الطالب — '+(s.fullName||s.name), `${info}<h3>سجل الحفظ</h3>${rpTable(['#','السورة','الحالة','التقدير','تاريخ الحفظ','الدورة'],mrows,'الحفظ')}${att}`, 'سجل-'+(s.fullName||s.name));
@@ -2494,7 +2904,7 @@ function buildReportInner(type, p){
     const pr = PROGRAMS.find(x=>x.id===p.pid); const g = GROUPS.find(x=>x.id===p.gid);
     if(!pr||!g) return R('جدول الدوام','<p>لا يوجد</p>');
     const studs = STUDENTS.filter(s=>s.groupId===g.id).sort(byName);
-    const rows = studs.map((s,i)=>{ const r=(((s.attendance||{})[pr.id])||{})[p.date]||{}; return [i+1,sn(s),statusTxt(r.status),r.surah?esc(surahName(r.surah)):'',r.from||'',r.to||'',esc(r.grade||''),r.finished?'✓ ختمها':'',esc(r.notes||'')]; });
+    const rows = studs.map((s,i)=>{ const r=(((s.attendance||{})[pr.id])||{})[p.date]||{}; const en=dayEntriesFilled(r); const J=f=>en.map(f).join('<br>'); return [i+1,sn(s),statusTxt(r.status),J(e=>esc(surahName(e.surah))),J(e=>e.from||''),J(e=>e.to||''),J(e=>esc(e.grade||'')),J(e=>e.finished?'✓ ختمها':''),esc(r.notes||'')]; });
     return R(`جدول الدوام — ${g.name} — ${p.date} (${dayNameOf(p.date)})`, `${rpKV([['النادي',esc(programLabel(pr))],['المعلم/ة',esc(g.teacherName||'—')]],'معلومات')}${rpTable(['#','الطالب','الحضور','السورة','من آية','إلى آية','التقدير','ختمها','ملاحظات'],rows,'جدول اليوم')}`, `دوام-${g.name}-${p.date}`, 'landscape');
   }
   if(type==='finalSheet'){
@@ -2529,7 +2939,7 @@ function buildReportInner(type, p){
   }
   if(type==='fullSystem'){
     const parts=[];
-    ['m','f'].forEach(g=>{ const list=STUDENTS.filter(s=>(s.gender||'m')===g).sort(byName); parts.push(`<h3>الكشف العام — ${genderLabel(g)}</h3>`+rpTable(['#','الاسم الرباعي','تاريخ الميلاد','تاريخ الانتساب','الهاتف','العنوان','المجموعة','المحفوظ'],list.map((s,i)=>[i+1,sn(s),esc(s.dob||''),esc(s.joinDate||''),esc(s.phone||''),esc(s.address||''),esc(groupNameById(s.groupId)),studentProgress(s).done+' / 114']),'الكشف '+genderLabel(g))); });
+    ['m','f'].forEach(g=>{ const list=STUDENTS.filter(s=>(s.gender||'m')===g).sort(byName); parts.push(`<h3>الكشف العام — ${genderLabel(g)}</h3>`+rpTable(['#','الاسم الرباعي','تاريخ الميلاد','تاريخ الانتساب','الهاتف','العنوان','المجموعة','المحفوظ'],list.map((s,i)=>[i+1,sn(s),ctt(s.dob),esc(s.joinDate||''),ctt(s.phone),ctt(s.address),esc(groupNameById(s.groupId)),studentProgress(s).done+' / 114']),'الكشف '+genderLabel(g))); });
     parts.push('<h3>المجموعات</h3>'+rpTable(['المجموعة','المعلم/ة','الحدود','عدد الطلاب'],GROUPS.map(g=>[esc(g.name),esc(g.teacherName||''),esc(rangeLabel(g).replace(/^ · /,'')),STUDENTS.filter(s=>s.groupId===g.id).length]),'المجموعات'));
     parts.push('<h3>البرامج والدورات</h3>'+rpTable(['الدورة','من','إلى','عدد الطلاب','منتهية'],PROGRAMS.map(x=>[esc(programLabel(x)),esc(x.startDate||''),esc(x.endDate||''),STUDENTS.filter(s=>studentInProgram(s,x.id)).length,x.finalized?'نعم':'']),'الدورات'));
     ['m','f'].forEach(g=>parts.push(`<h3>قائمة الشرف — ${genderLabel(g)}</h3>`+rpTable(['#','الاسم','التاريخ'],honorEntries(g).map((e,i)=>[i+1,esc(e.name),esc(e.date||'')]),'الشرف '+genderLabel(g))));
@@ -2596,7 +3006,7 @@ function reportsPageHTML(){
   try{ rep = buildReport(rt.id, currentReportParams(rt)); }catch(e){ rep = {title:'تقرير', html:'<p>تعذّر بناء التقرير: '+esc(e.message)+'</p>', filename:'تقرير'}; }
   CURRENT_REPORT = rep;
   return `
-    <div class="pagehead"><div><h1>التقارير والطباعة والنسخ الاحتياطي</h1><p>اختر ماذا تريد أن تطبع أو تصدّر، ثم اضغط طباعة أو PDF أو Word أو Excel.</p></div></div>
+    <div class="pagehead"><div><h1>التقارير والطباعة${isSuper()?' والنسخ الاحتياطي':''}</h1><p>اختر ماذا تريد أن تطبع أو تصدّر، ثم اضغط طباعة أو PDF أو Word أو Excel.</p></div></div>
     <div class="card" style="padding:16px 18px;margin-bottom:18px;">
       <div class="toolbar" style="align-items:flex-end;">
         <div class="field" style="min-width:280px;margin:0;"><label>ماذا تريد أن تطبع؟</label>
@@ -2606,7 +3016,7 @@ function reportsPageHTML(){
       ${exportButtonsHTML()}
       <div class="report-preview">${rep.html.replace(/%%LOGO%%/g, LOGO_URI)}</div>
     </div>
-    ${backupCardHTML()}
+    ${isSuper()? backupCardHTML() : ''}
   `;
 }
 function showReport(rep){
@@ -2681,18 +3091,20 @@ function exportCurrent(kind){
 /* =========================================================
    النسخ الاحتياطي: تنزيل يدوي + استعادة + نسخ تلقائي لملف على الحاسوب
    ========================================================= */
-const BACKUP_COLLECTIONS = [['groups',()=>GROUPS],['students',()=>STUDENTS],['admins',()=>ADMINS],['cycles',()=>CYCLES],['programs',()=>PROGRAMS],['announcements',()=>ANNOUNCEMENTS],['honor',()=>HONOR],['tajweedLevels',()=>TAJ_LEVELS],['tajweedLessons',()=>TAJ_LESSONS],['finalSheets',()=>FINALS]];
+const BACKUP_COLLECTIONS = [['groups',()=>GROUPS],['students',()=>STUDENTS],['admins',()=>ADMINS],['cycles',()=>CYCLES],['programs',()=>PROGRAMS],['announcements',()=>ANNOUNCEMENTS],['honor',()=>HONOR],['tajweedLevels',()=>TAJ_LEVELS],['tajweedLessons',()=>TAJ_LESSONS],['finalSheets',()=>FINALS],['notifications',()=>NOTIFS],['studentNotes',()=>NOTES]];
 function collectAllData(){
   const cols = {};
   BACKUP_COLLECTIONS.forEach(([name,get])=>{ cols[name] = get().map(d=>({...d})); });
   return {app:'isra-quran-center', version:2, exportedAt:new Date().toISOString(), collections:cols, settings:SETTINGS};
 }
 function downloadBackupNow(){
+  if(!isSuper()) return toast('النسخ الاحتياطي للمشرف الرئيسي أو المسؤول الكبير فقط');
   const stamp = fmtLocalDate(new Date());
   downloadBlob(new Blob([JSON.stringify(collectAllData())], {type:'application/json'}), `isra-backup-${stamp}.json`);
   toast('تم تنزيل النسخة الاحتياطية');
 }
 function restoreFromFile(input){
+  if(!isSuper()){ toast('الاستعادة للمشرف الرئيسي أو المسؤول الكبير فقط'); return; }
   const f = input.files && input.files[0]; if(!f) return;
   const rd = new FileReader();
   rd.onload = ()=>{
@@ -2758,7 +3170,7 @@ async function writeBackupNow(){
   updateBackupUI();
 }
 function scheduleAutoBackup(){
-  if(!backupHandle || !backupPerm || lastBackupVer===dataVer) return;
+  if(!isSuper() || !backupHandle || !backupPerm || lastBackupVer===dataVer) return;
   clearTimeout(backupTimer); backupTimer = setTimeout(writeBackupNow, 4000);
 }
 function backupStatusText(){
@@ -2795,6 +3207,55 @@ function backupCardHTML(){
   openModal = function(kind, arg){
     orig(kind, arg);
     const body = document.getElementById('modalBody');
+    if(kind==='adminPerms'){
+      const a = ADMINS.find(x=>x.id===arg); if(!a) return;
+      const ep = effPerms(a); const sc = effScope(a); const gids = a.groupIds||[];
+      const isFull = a.role==='full';
+      const sel = (k)=>`<select id="ap_${k}" style="width:auto;">${[['none','لا يشوف'],['view','اطلاع فقط'],['edit','اطلاع وتعديل']].map(([v,l])=>`<option value="${v}" ${ep[k]===v?'selected':''}>${l}</option>`).join('')}</select>`;
+      const chk = (id,label,val)=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:6px;"><input type="checkbox" id="${id}" style="width:auto;" ${val?'checked':''}> ${label}</label>`;
+      body.style.maxWidth = '680px';
+      body.innerHTML = `<button class="close-x" onclick="closeModal()">✕</button><h2>صلاحيات: ${esc(a.name)}</h2>
+        <div class="field"><label>الدور</label><select id="apRole" onchange="document.getElementById('apLimited').style.display=this.value==='full'?'none':'block'">
+          <option value="limited" ${!isFull?'selected':''}>مسؤول محدود (حسب الصلاحيات أدناه)</option>
+          <option value="full" ${isFull?'selected':''} ${isMainAdmin()?'':'disabled'}>مسؤول كبير — صلاحية كاملة بكل شي ${isMainAdmin()?'':'(للمشرف الرئيسي فقط)'}</option></select></div>
+        <div id="apLimited" style="display:${isFull?'none':'block'};">
+          <div class="toolbar" style="margin-bottom:10px;"><span class="mini-note">قوالب جاهزة:</span>
+            <button class="btn btn-ghost btn-sm" onclick="applyPermPreset('view')">اطلاع فقط</button>
+            <button class="btn btn-ghost btn-sm" onclick="applyPermPreset('groupAdmin')">مشرف مجموعة</button>
+            <button class="btn btn-ghost btn-sm" onclick="applyPermPreset('noDelete')">كامل بدون حذف</button></div>
+          <div class="field"><label>نطاق العمل على المجموعات</label><select id="apScope">
+            <option value="all" ${sc==='all'?'selected':''}>كل المجموعات</option>
+            <option value="own" ${sc==='own'?'selected':''}>مجموعاته فقط (بيشوف ويعدّل مجموعاته بس)</option>
+            <option value="own_edit" ${sc==='own_edit'?'selected':''}>بيعدّل مجموعاته أولًا وبيطّلع على باقي المجموعات للقراءة فقط</option></select></div>
+          <div class="field"><label>المجموعات المسندة إليه</label><div style="max-height:130px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px 12px;">
+            ${RAW_GROUPS.map(g=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:6px;"><input type="checkbox" class="apGrp" value="${g.id}" style="width:auto;" ${gids.includes(g.id)?'checked':''}> ${esc(g.name)}</label>`).join('') || '<span class="mini-note">لا توجد مجموعات</span>'}</div></div>
+          <div class="field"><label>الأقسام: شو يشوف وشو يعدّل</label>
+            <table class="compact"><tbody>${PERM_SECTIONS.map(([k,l])=>`<tr><td>${l}</td><td>${sel(k)}</td></tr>`).join('')}</tbody></table></div>
+          <div class="field"><label>صلاحيات خاصة</label>
+            ${chk('apDel','يقدر يحذف (مجموعات / طلاب / دورات / مستويات)', a.canDelete===true || isLegacyAdmin(a))}
+            ${chk('apContact','يشوف بيانات التواصل (هاتف، عنوان، تاريخ ميلاد)', a.seeContact===true || isLegacyAdmin(a))}
+            ${chk('apPass','يشوف كلمات سر الطلاب', a.seeStudentPass===true || isLegacyAdmin(a))}
+            ${chk('apCreds','يشوف ويغيّر أسماء المستخدمين وكلمات السر للمسؤولين (وإضافة/إزالة مسؤولين مع صلاحية قسم المسؤولين)', a.canViewCreds===true)}</div>
+        </div>
+        <input type="hidden" id="apId" value="${a.id}">
+        <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button><button class="btn btn-primary" onclick="submitAdminPerms()">حفظ الصلاحيات</button></div>`;
+    }
+    if(kind==='adminProfile'){
+      const a = ADMINS.find(x=>x.id===arg); if(!a) return;
+      const p = a.profile || {};
+      const editable = a.id===session.id || (isSuper() && a.id!==mainAdminId() && (a.role!=='full' || isMainAdmin()));
+      const dis = editable ? '' : 'disabled';
+      body.innerHTML = `<button class="close-x" onclick="closeModal()">✕</button><h2>الملف الشخصي: ${esc(a.name)}</h2>
+        <div class="row2"><div class="field"><label>الاسم الكامل</label><input id="apfName" ${dis} value="${esc(p.fullName||'')}"></div>
+          <div class="field"><label>المسمى (شيخ / معلم / معلمة / مشرف...)</label><input id="apfTitle" ${dis} value="${esc(p.title||'')}"></div></div>
+        <div class="row2"><div class="field"><label>رقم الهاتف</label><input id="apfPhone" ${dis} style="direction:ltr;text-align:left;" value="${esc(p.phone||'')}"></div>
+          <div class="field"><label>تاريخ الميلاد</label><input type="date" id="apfDob" ${dis} value="${esc(p.dob||'')}"></div></div>
+        <div class="row2"><div class="field"><label>العنوان</label><input id="apfAddr" ${dis} value="${esc(p.address||'')}"></div>
+          <div class="field"><label>تاريخ التعيين</label><input type="date" id="apfHire" ${dis} value="${esc(p.hireDate||'')}"></div></div>
+        <div class="field"><label>ملاحظات</label><textarea id="apfNotes" ${dis} style="height:70px;">${esc(p.notes||'')}</textarea></div>
+        <input type="hidden" id="apfId" value="${a.id}">
+        <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إغلاق</button>${editable? `<button class="btn btn-primary" onclick="submitAdminProfile()">حفظ</button>` : ''}</div>`;
+    }
     if(kind==='addHonor'){
       body.innerHTML = `<button class="close-x" onclick="closeModal()">✕</button><h2>إضافة اسم لقائمة الشرف</h2>
         <div class="field"><label>الاسم</label><input id="nhName"></div>
@@ -2821,6 +3282,94 @@ function backupCardHTML(){
   };
 })();
 
+
+/* =========================================================
+   الإشعارات داخل الموقع + ملاحظات الطلاب
+   ========================================================= */
+function fmtTs(ts){ try{ return new Date(ts).toLocaleString('ar-JO',{dateStyle:'medium',timeStyle:'short'}); }catch(e){ return new Date(ts).toISOString().slice(0,16).replace('T',' '); } }
+function pushNotif(n){
+  return db.collection('notifications').add({to:n.to, type:n.type, title:n.title, body:n.body||'', refId:n.refId||null, createdAt:Date.now(), by:(session&&session.name)||''});
+}
+/* إشعارات تحديث الحفظ: نجمع التعديلات المتتالية خلال دقيقتين بإشعار واحد حتى ما نغرق الطالب */
+const progNotif = {};
+function notifyProgress(stId, items){
+  const now = Date.now();
+  let e = progNotif[stId];
+  const bodyOf = ()=>Object.values(e.by).join(' | ');
+  if(e && now - e.ts < 120000){
+    items.forEach(it=>{ e.by[it.key] = it.text; }); e.ts = now;
+    e.chain = e.chain.then(()=>{ if(e.id) return db.collection('notifications').doc(e.id).update({body:bodyOf(), createdAt:Date.now()}); });
+  } else {
+    e = progNotif[stId] = {ts:now, by:{}, id:null, chain:null};
+    items.forEach(it=>{ e.by[it.key] = it.text; });
+    e.chain = pushNotif({to:stId, type:'progress', title:'تحديث على سجل حفظك', body:bodyOf()}).then(ref=>{ e.id = ref && ref.id; });
+  }
+}
+function myNotifs(){
+  if(!session || session.role!=='student') return [];
+  return NOTIFS.filter(n=>n.to==='all' || n.to===session.id).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+}
+function seenTs(){ return Number(localStorage.getItem('isra_seen_'+(session?session.id:''))||0); }
+function unreadCount(){ const t = seenTs(); return myNotifs().filter(n=>(n.createdAt||0)>t).length; }
+function incomingNotif(n){
+  if(!session || session.role!=='student') return;
+  if(!(n.to==='all' || n.to===session.id)) return;
+  toast('🔔 '+n.title+(n.body? ': '+n.body : ''), 7000);
+  try{
+    if('Notification' in window && Notification.permission==='granted' && document.hidden){
+      new Notification(n.title, {body:n.body||'', icon: LOGO_URI});
+    }
+  }catch(e){}
+}
+function openNotifications(){
+  const t = seenTs();
+  const list = myNotifs();
+  const icon = {announcement:'📢', note:'📝', progress:'📖'};
+  const items = list.map(n=>`<div class="card" style="padding:12px 14px;margin-bottom:8px;${(n.createdAt||0)>t?'border-inline-start:4px solid var(--emerald-600);':''}">
+      <div style="font-weight:700;">${icon[n.type]||'🔔'} ${esc(n.title||'')}</div>
+      ${n.body? `<div style="font-size:13.5px;color:var(--ink-600);margin-top:3px;white-space:pre-wrap;">${esc(n.body)}</div>`:''}
+      <div class="mini-note" style="margin-top:4px;">${fmtTs(n.createdAt||0)}</div></div>`).join('') || '<p class="mini-note">لا توجد إشعارات بعد.</p>';
+  const canAsk = ('Notification' in window) && Notification.permission==='default';
+  const body = document.getElementById('modalBody');
+  document.getElementById('modalOverlay').classList.remove('hidden');
+  body.style.maxWidth = '';
+  body.innerHTML = `<button class="close-x" onclick="closeModal()">✕</button><h2>🔔 الإشعارات</h2>
+    ${canAsk? `<button class="btn btn-ghost btn-sm" style="margin-bottom:10px;" onclick="askBrowserNotif()">تفعيل تنبيهات المتصفح (تعمل والصفحة مفتوحة)</button>`:''}
+    <div style="max-height:60vh;overflow-y:auto;">${items}</div>`;
+  if(list.length){ localStorage.setItem('isra_seen_'+session.id, String(Math.max(...list.map(n=>n.createdAt||0)))); render(); }
+}
+function askBrowserNotif(){ try{ Notification.requestPermission().then(()=>openNotifications()); }catch(e){} }
+
+/* ملاحظات الطالب — تظهر بصفحته وتوصله كإشعار */
+function studentNotesHTML(stId){
+  const list = NOTES.filter(n=>n.studentId===stId).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  const rows = list.map(n=>`<div class="card" style="padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+      <div><div style="white-space:pre-wrap;font-size:13.5px;">${esc(n.text)}</div><div class="mini-note">${esc(n.by||'')} · ${fmtTs(n.createdAt||0)}</div></div>
+      <button class="btn btn-danger btn-sm" onclick="deleteStudentNote('${n.id}','${stId}')">حذف</button></div>`).join('');
+  return `<div class="field" data-write="1"><textarea id="noteText" style="height:70px;" placeholder="اكتب ملاحظة للطالب..."></textarea></div>
+    <button class="btn btn-primary btn-sm" style="margin-bottom:10px;" onclick="addStudentNote('${stId}')">إرسال الملاحظة</button>
+    ${rows || '<p class="mini-note">لا توجد ملاحظات لهذا الطالب.</p>'}`;
+}
+function refreshStudentNotes(stId){ const w = document.getElementById('studentNotesWrap'); if(w){ w.innerHTML = studentNotesHTML(stId); relockStudent(w); } }
+function addStudentNote(stId){
+  const ta = document.getElementById('noteText'); const text = ta ? ta.value.trim() : '';
+  if(!text) return toast('اكتب نص الملاحظة');
+  db.collection('studentNotes').add({studentId:stId, text, createdAt:Date.now(), by:session.name}).then(ref=>{
+    pushNotif({to:stId, type:'note', title:'ملاحظة جديدة من المسؤول', body: text.length>160? text.slice(0,160)+'…' : text, refId: ref && ref.id});
+    toast('تم إرسال الملاحظة للطالب');
+    refreshStudentNotes(stId);
+  });
+}
+function deleteStudentNote(id, stId){
+  if(!confirm('حذف هذه الملاحظة؟')) return;
+  db.collection('studentNotes').doc(id).delete().then(()=>refreshStudentNotes(stId));
+  NOTIFS.filter(n=>n.refId===id).forEach(n=>db.collection('notifications').doc(n.id).delete());
+}
+function myNotesViewHTML(stId){
+  const list = NOTES.filter(n=>n.studentId===stId).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  if(!list.length) return '';
+  return `<h2 class="serif" style="font-size:17px;color:var(--emerald-800);">📝 ملاحظات من المسؤول</h2>` + list.map(n=>`<div class="card" style="padding:12px 16px;margin-bottom:8px;"><div style="white-space:pre-wrap;font-size:14px;">${esc(n.text)}</div><div class="mini-note" style="margin-top:4px;">${esc(n.by||'')} · ${fmtTs(n.createdAt||0)}</div></div>`).join('');
+}
 
 /* boot */
 boot();
