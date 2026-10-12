@@ -478,7 +478,8 @@ let GROUPS=[], STUDENTS=[], ADMINS=[], CYCLES=[], PROGRAMS=[], ANNOUNCEMENTS=[],
 let unsubHonor=null, unsubTajLevels=null, unsubTajLessons=null, unsubFinals=null, unsubPresence=null;
 let RAWDB=null, GUARD_OFF=false;
 let RAW_GROUPS=[], RAW_STUDENTS=[], RAW_CYCLES=[], RAW_FINALS=[];
-let unsubNotifs=null, unsubNotes=null;
+let unsubNotifs=null, unsubNotes=null, unsubSurveys=null, unsubSurveyResp=null;
+let SURVEYS=[], SURVEY_RESP=[], lastMyRespSig='';
 let NOTIFS=[], NOTES=[];
 let notifTs = {}, notifsFirstLoad = true;
 let HONOR=[], TAJ_LEVELS=[], TAJ_LESSONS=[], FINALS=[], PRESENCE={};
@@ -549,7 +550,7 @@ function boot(){
 
 /* ---------------- اشتراكات لحظية Firestore ---------------- */
 function subscribeAll(onFirstLoad){
-  let loaded = {g:false,s:false,a:false,c:false,p:false,an:false,st:false,h:false,tl:false,tls:false,fin:false,nf:false,nt:false};
+  let loaded = {g:false,s:false,a:false,c:false,p:false,an:false,st:false,h:false,tl:false,tls:false,fin:false,nf:false,nt:false,sv:false,sr:false};
   const checkLoaded = ()=>{
     if(Object.values(loaded).every(Boolean) && !dataReady){
       dataReady = true;
@@ -624,6 +625,23 @@ function subscribeAll(onFirstLoad){
     NOTES = snap.docs.map(d=>({id:d.id,...d.data()}));
     loaded.nt = true; checkLoaded(); render();
   }, err=>{ loaded.nt = true; checkLoaded(); });
+
+  unsubSurveys = db.collection('surveys').onSnapshot(snap=>{
+    SURVEYS = snap.docs.map(d=>({id:d.id,...d.data()}));
+    loaded.sv = true; checkLoaded(); render();
+  }, err=>{ loaded.sv = true; checkLoaded(); });
+
+  /* ردود الاستبيانات: ما نعيد رسم صفحة الطالب إلا إذا تغيّر ردّه هو (حتى ما نقطع عليه الكتابة) */
+  unsubSurveyResp = db.collection('surveyResponses').onSnapshot(snap=>{
+    SURVEY_RESP = snap.docs.map(d=>({id:d.id,...d.data()}));
+    loaded.sr = true; checkLoaded();
+    if(session && session.role==='student'){
+      const sig = JSON.stringify(SURVEY_RESP.filter(r=>r.studentId===session.id).map(r=>[r.id, r.updatedAt]));
+      if(sig===lastMyRespSig) return;
+      lastMyRespSig = sig;
+    }
+    render();
+  }, err=>{ loaded.sr = true; checkLoaded(); });
 
   /* حضور المسؤولين — لا يستدعي render() كي لا يقطع الكتابة */
   unsubPresence = db.collection('presence').onSnapshot(snap=>{
@@ -761,24 +779,25 @@ function adminWriteAllowed(id, op, data){
   const target = ADMINS.find(a=>a.id===id);
   const keys = Object.keys(data||{});
   if(op==='add'){
-    if(isSuper()) return !(data && data.role==='full' && !isMainAdmin());
+    if(isSuper()) return true;
     return canManageAdmins() && !(data && (data.role==='full' || data.canViewCreds===true));
   }
   if(op==='delete'){
     if(id===mainId || id===session.id) return false;
-    if(target && target.role==='full' && !isMainAdmin()) return false;
     return canManageAdmins();
   }
   if(id===session.id) return keys.every(k=>['name','username','password','profile'].includes(k));
   if(!isSuper()) return false;
   if(id===mainId) return false;
-  if(target && target.role==='full' && !isMainAdmin()) return false;
-  if(keys.includes('role') && data.role==='full' && !isMainAdmin()) return false;
   return true;
 }
 function guardAllow(name, id, op, data){
   if(GUARD_OFF || !session) return true;
-  if(session.role!=='admin') return false;
+  if(session.role!=='admin'){
+    /* الطالب/ولي الأمر يكتب فقط إجابته هو على الاستبيان */
+    if(name==='surveyResponses' && (op==='set' || op==='update' || op==='add')) return !!data && data.studentId===session.id && String(id||'').endsWith('__'+session.id);
+    return false;
+  }
   if(name==='presence' || name==='notifications') return true;
   if(name==='admins') return adminWriteAllowed(id, op, data);
   if(isSuper()) return true;
@@ -806,6 +825,7 @@ function guardAllow(name, id, op, data){
     case 'tajweedLevels': return canEditSec('tajweed') && (op!=='delete' || canDeleteStuff());
     case 'tajweedLessons': return canEditSec('tajweed');
     case 'settings': return canEditSec('settings');
+    case 'surveys': case 'surveyResponses': return canEditSec('announcements');
   }
   return false;
 }
@@ -975,7 +995,9 @@ function render(){
     return;
   }
   const snap = captureUIState();
+  const draft = session.role==='student' ? captureSurveyDraft() : null;
   if(session.role==='admin') renderAdmin(); else renderStudentView();
+  if(draft) restoreSurveyDraft(draft);
   if(session.role==='admin') applyPermissionLock();
   restoreUIState(snap);
   if(session.role==='admin') scheduleAutoBackup();
@@ -1050,8 +1072,12 @@ function fmtLocalDate(d){
 function programExtraDates(p){
   return ((p && p.extraDates) || []).filter(x=>x && x.date).map(x=>x.date);
 }
-function isExtraDay(p, d){ return programExtraDates(p).includes(d); }
-function programSessionDates(p){
+function groupExtraList(gid, pid){
+  const g = RAW_GROUPS.find(x=>x.id===gid);
+  return ((g && g.extraDays && g.extraDays[pid]) || []).filter(x=>x && x.date);
+}
+function isExtraDay(p, d, gid){ return programExtraDates(p).includes(d) || (!!gid && groupExtraList(gid, p.id).some(x=>x.date===d)); }
+function programSessionDates(p, gid){
   if(!p) return [];
   const isWinterSummer = p.type==='النادي الشتوي' || p.type==='النادي الصيفي';
   const allowedDays = isWinterSummer? [6,1,3] : [6];
@@ -1068,9 +1094,16 @@ function programSessionDates(p){
   }
   /* أيام إضافية يدوية (حالات استثنائية) خارج الأيام المحددة للنادي */
   programExtraDates(p).forEach(x=>set.add(x));
+  if(gid) groupExtraList(gid, p.id).forEach(x=>set.add(x.date));
   return Array.from(set).sort();
 }
-function dayLabel(p, d){ return `${d} — ${dayNameOf(d)}${isExtraDay(p,d)?' (يوم إضافي)':''}`; }
+/* كل الأيام لدورة بما فيها الإضافية الخاصة بأي مجموعة (للكشوف المجمّعة) */
+function programDatesUnion(p){
+  const set = new Set(programSessionDates(p));
+  RAW_GROUPS.forEach(g=>groupExtraList(g.id, p.id).forEach(x=>set.add(x.date)));
+  return Array.from(set).sort();
+}
+function dayLabel(p, d, gid){ return `${d} — ${dayNameOf(d)}${isExtraDay(p,d,gid)?' (يوم إضافي)':''}`; }
 function rangeLabel(g){
   let parts=[];
   if(g.ageMin!=null && g.ageMax!=null && g.ageMin!=='' && g.ageMax!=='') parts.push(`العمر ${g.ageMin}-${g.ageMax}`);
@@ -1239,7 +1272,7 @@ function ensureDailyDefaults(gid){
     dailyProgramId = best.id; dailyDate = null;
   }
   const p = PROGRAMS.find(x=>x.id===dailyProgramId);
-  const dates = programSessionDates(p);
+  const dates = programSessionDates(p, gid);
   if(!dailyDate || !dates.includes(dailyDate)){
     const today = fmtLocalDate(new Date());
     const past = dates.filter(d=>d<=today);
@@ -1251,16 +1284,17 @@ function dailyTableSectionHTML(gid){
   if(!PROGRAMS.length) return head + `<p class="mini-note">أضف نادي/برنامج من تبويب "البرامج والدورات" (مع تاريخ من والى) ليظهر جدول الدوام اليومي هون.</p>`;
   ensureDailyDefaults(gid);
   const p = PROGRAMS.find(x=>x.id===dailyProgramId);
-  const dates = programSessionDates(p);
+  const dates = programSessionDates(p, gid);
   const progOpts = PROGRAMS.slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||'')).map(x=>`<option value="${x.id}" ${x.id===dailyProgramId?'selected':''}>${esc(programLabel(x))}</option>`).join('');
   const controls = `
     <div class="toolbar">
       <select style="width:auto;min-width:200px;" onchange="dailyProgramId=this.value;dailyDate=null;render();">${progOpts}</select>
-      ${dates.length? `<select style="width:auto;min-width:190px;" onchange="dailyDate=this.value;render();">${dates.map(d=>`<option value="${d}" ${d===dailyDate?'selected':''}>${dayLabel(p,d)}</option>`).join('')}</select>
+      ${dates.length? `<select style="width:auto;min-width:190px;" onchange="dailyDate=this.value;render();">${dates.map(d=>`<option value="${d}" ${d===dailyDate?'selected':''}>${dayLabel(p,d,gid)}</option>`).join('')}</select>
       <button class="btn btn-ghost btn-sm" onclick="openReportModal('dailySheet',{gid:'${gid}',pid:'${p.id}',date:'${dailyDate}'})">🖨️ طباعة جدول هذا اليوم</button>
       <button class="btn btn-ghost btn-sm" onclick="openReportModal('attendanceSheet',{gid:'${gid}',pid:'${p.id}'})">🖨️ كشف الحضور الكامل للنادي</button>` : ''}
     </div>`;
-  if(!dates.length) return head + controls + `<p class="mini-note">حدّد تاريخ البداية والنهاية لهذا البرنامج من "البرامج والدورات" ليظهر جدول أيام الدوام.</p>`;
+  const extraPanel = groupExtraDaysPanelHTML(gid, p);
+  if(!dates.length) return head + controls + extraPanel + `<p class="mini-note">حدّد تاريخ البداية والنهاية لهذا البرنامج من "البرامج والدورات" ليظهر جدول أيام الدوام.</p>`;
   const studs = STUDENTS.filter(s=>s.groupId===gid).sort(byName);
   let present=0, absent=0;
   const rows = studs.map(s=>{
@@ -1268,7 +1302,7 @@ function dailyTableSectionHTML(gid){
     if(rec.status==='present') present++; if(rec.status==='absent') absent++;
     return `<tr><td style="white-space:nowrap;"><b>${esc(s.fullName||s.name)}</b></td>${sessionCellsHTML(s.id, p.id, dailyDate, rec, 'd:'+s.id, true)}</tr>${extraRowsHTML(s.id, p.id, dailyDate, rec, 'd:'+s.id, 1)}`;
   }).join('') || `<tr><td colspan="8" style="text-align:center;color:var(--ink-400);padding:20px;">لا يوجد طلاب بهذه المجموعة</td></tr>`;
-  return head + controls + `
+  return head + controls + extraPanel + `
     <div class="mini-note" style="margin-bottom:8px;">${esc(programLabel(p))} — ${dailyDate} (${dayNameOf(dailyDate)}) · حاضر: ${present} · غائب: ${absent}. أي تسميع بتسجله بينعكس تلقائيًا على سجل الطالب الرئيسي (محفوظة / قيد الحفظ + التقدير).</div>
     <div class="card" style="padding:10px 12px;overflow-x:auto;">
       <table class="compact"><thead><tr><th>الطالب</th>${SESSION_HEAD}<th>ملاحظات</th></tr></thead><tbody>${rows}</tbody></table>
@@ -1295,8 +1329,8 @@ function groupAdminsLabel(gid){
   const names = ADMINS.filter(a=>!isBigAdmin(a) && (a.groupIds||[]).includes(gid)).map(a=>esc(a.name));
   return names.length ? ' · مسؤولو المجموعة: '+names.join('، ') : '';
 }
-function canEditAdminPerms(a){ return isSuper() && a.id!==mainAdminId() && a.id!==session.id && (a.role!=='full' || isMainAdmin()); }
-function canViewAdminProfile(a){ return a.id===session.id || (isSuper() && (a.id!==mainAdminId() || isMainAdmin()) && (a.role!=='full' || isMainAdmin())) || isMainAdmin(); }
+function canEditAdminPerms(a){ return isSuper() && a.id!==mainAdminId() && a.id!==session.id; }
+function canViewAdminProfile(a){ return a.id===session.id || isSuper(); }
 function adminsPageHTML(){
   const mainId = mainAdminId();
   const seeAll = canSeeCreds();
@@ -1304,7 +1338,7 @@ function adminsPageHTML(){
     const isMainRow = a.id===mainId;
     const isMe = a.id===session.id;
     const showCreds = seeAll || isMe;
-    const canRemove = canManageAdmins() && !isMainRow && !isMe && !(a.role==='full' && !isMainAdmin());
+    const canRemove = canManageAdmins() && !isMainRow && !isMe;
     return `<tr>
       <td><b>${esc(a.name)}</b>${isMe?' <span class="tag">أنت</span>':''}</td>
       <td style="direction:ltr;text-align:left;">${showCreds? esc(adminUsername(a)) : '<span class="mini-note">مخفي</span>'}</td>
@@ -1328,7 +1362,7 @@ function adminsPageHTML(){
     <div class="card" style="padding:16px 18px;overflow-x:auto;">
       <table><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>كلمة السر</th><th>الدور</th><th>النطاق والصلاحيات</th><th>الحالة</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     </div>
-    <p class="mini-note" style="margin-top:10px;">الأدوار: <b>المشرف الرئيسي</b> (كل شي ولا أحد يعدّل عليه) · <b>مسؤول كبير</b> (صلاحية كاملة، يعيّنه المشرف الرئيسي فقط) · <b>مسؤول محدود</b> (حسب الصلاحيات والمجموعات المحددة له). المسؤولون القدامى (قبل هذا التحديث) محتفظين بصلاحياتهم السابقة إلى أن تضبطها لهم.</p>
+    <p class="mini-note" style="margin-top:10px;">الأدوار: <b>المشرف الرئيسي</b> (كل شي، وحسابه محمي من الحذف والتعديل من الباقي) · <b>مسؤول كبير</b> (نفس صلاحيات المشرف الرئيسي: يضيف ويحذف مسؤولين ويضبط صلاحياتهم، يعيّنه المشرف الرئيسي أو أي مسؤول كبير) · <b>مسؤول محدود</b> (حسب الصلاحيات والمجموعات المحددة له). المسؤولون القدامى (قبل هذا التحديث) محتفظين بصلاحياتهم السابقة إلى أن تضبطها لهم.</p>
   `;
 }
 const DEFAULT_LIMITED_PERMS = {groups:'view', roster:'view', programs:'none', tajweed:'none', honor:'none', reports:'view', announcements:'view', settings:'none', admins:'none'};
@@ -1350,7 +1384,6 @@ function submitAdminPerms(){
   const id = document.getElementById('apId').value;
   const a = ADMINS.find(x=>x.id===id); if(!a || !canEditAdminPerms(a)) return toast('ما عندك صلاحية');
   const role = document.getElementById('apRole').value;
-  if(role==='full' && !isMainAdmin()) return toast('تعيين مسؤول كبير للمشرف الرئيسي فقط');
   const perms = {}; PERM_SECTIONS.forEach(([k])=>{ perms[k] = document.getElementById('ap_'+k).value; });
   const scope = document.getElementById('apScope').value;
   const groupIds = Array.from(document.querySelectorAll('.apGrp:checked')).map(x=>x.value);
@@ -1490,17 +1523,47 @@ function programDetailHTML(id){
     </div>
   `;
 }
+/* يوم دوام إضافي خاص بمجموعة واحدة (لظرف استثنائي) — بيظهر بجداول هذه المجموعة وطلابها فقط */
+function groupExtraDaysPanelHTML(gid, p){
+  const list = groupExtraList(gid, p.id).slice().sort((a,b)=>a.date.localeCompare(b.date));
+  const chips = list.map(x=>`<span class="tag" style="display:inline-flex;gap:6px;align-items:center;margin:2px 4px 2px 0;">${esc(x.date)} (${dayNameOf(x.date)})${x.note? ' — '+esc(x.note):''} <button class="btn btn-danger btn-sm" style="padding:0 6px;" title="حذف هذا اليوم" onclick="removeExtraDayForGroup('${gid}','${p.id}','${x.date}')">✕</button></span>`).join('');
+  return `<div class="card" style="padding:10px 14px;margin-bottom:10px;">
+    <div style="font-weight:700;font-size:13.5px;margin-bottom:6px;">➕ يوم إضافي لهذه المجموعة فقط (حالة استثنائية) — ${esc(programLabel(p))}</div>
+    <div class="toolbar" data-write="1" style="margin-bottom:6px;">
+      <input type="date" id="gxDate" style="width:auto;">
+      <input id="gxNote" placeholder="السبب (اختياري)" style="max-width:220px;">
+      <button class="btn btn-primary btn-sm" onclick="addExtraDayForGroup('${gid}','${p.id}')">+ إضافة اليوم</button>
+    </div>
+    <div>${chips || '<span class="mini-note">لا توجد أيام إضافية لهذه المجموعة بهذا النادي.</span>'}</div>
+  </div>`;
+}
+function addExtraDayForGroup(gid, pid){
+  const g = RAW_GROUPS.find(x=>x.id===gid), p = PROGRAMS.find(x=>x.id===pid); if(!g||!p) return;
+  const date = document.getElementById('gxDate').value;
+  const note = document.getElementById('gxNote').value.trim();
+  if(!date) return toast('اختر تاريخ اليوم');
+  if(programSessionDates(p, gid).includes(date)) return toast('هذا اليوم موجود أصلًا ضمن أيام دوام هذه المجموعة');
+  const extraDays = {...(g.extraDays||{})};
+  extraDays[pid] = [...(extraDays[pid]||[]), {date, note}];
+  db.collection('groups').doc(gid).update({extraDays}).then(()=>{ dailyDate = date; toast('تمت إضافة اليوم لهذه المجموعة'); });
+}
+function removeExtraDayForGroup(gid, pid, date){
+  const g = RAW_GROUPS.find(x=>x.id===gid); if(!g) return;
+  const used = RAW_STUDENTS.some(s=>s.groupId===gid && (()=>{ const r = (((s.attendance||{})[pid])||{})[date]; return r && (r.status || r.surah || r.notes || r.signature); })());
+  if(!confirm(used ? 'هذا اليوم فيه بيانات حضور/تسميع مسجّلة لطلاب المجموعة. حذفه بيخفيه من الجداول بس ما بيحذف البيانات من سجلات الطلاب. متابعة؟' : 'حذف هذا اليوم الإضافي؟')) return;
+  const extraDays = {...(g.extraDays||{})};
+  extraDays[pid] = (extraDays[pid]||[]).filter(x=>x.date!==date);
+  db.collection('groups').doc(gid).update({extraDays}).then(()=>{ if(dailyDate===date) dailyDate = null; toast('تم الحذف'); });
+}
+
 function extraDaysSectionHTML(p){
   const list = ((p.extraDates||[]).slice()).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-  const rows = list.map(x=>`<tr><td>${esc(x.date)}</td><td>${dayNameOf(x.date)}</td><td>${esc(x.note||'')}</td><td><button class="btn btn-danger btn-sm" onclick="removeExtraDay('${p.id}','${x.date}')">حذف</button></td></tr>`).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--ink-400);padding:12px;">لا توجد أيام إضافية</td></tr>`;
-  return `
-    <h2 class="section-title" style="margin-top:0;">➕ أيام دوام إضافية (حالات استثنائية)</h2>
-    <p class="mini-note" style="margin-bottom:8px;">أيام خارج الأيام المحددة للنادي (مثل تعويض يوم أو دوام استثنائي). بتظهر تلقائيًا بجدول الحضور والتسميع لكل المجموعات.</p>
-    <div class="toolbar" data-write="1">
-      <input type="date" id="exDate" style="width:auto;">
-      <input id="exNote" placeholder="سبب / ملاحظة (اختياري)" style="max-width:260px;">
-      <button class="btn btn-primary btn-sm" onclick="addExtraDay('${p.id}')">+ إضافة يوم</button>
-    </div>
+  const note = `<p class="mini-note" style="margin-bottom:12px;">لإضافة يوم دوام استثنائي لمجموعة معينة: افتح صفحة المجموعة ← جدول الدوام اليومي ← "يوم إضافي لهذه المجموعة فقط".</p>`;
+  if(!list.length) return note;
+  const rows = list.map(x=>`<tr><td>${esc(x.date)}</td><td>${dayNameOf(x.date)}</td><td>${esc(x.note||'')}</td><td><button class="btn btn-danger btn-sm" onclick="removeExtraDay('${p.id}','${x.date}')">حذف</button></td></tr>`).join('');
+  return note + `
+    <h2 class="section-title" style="margin-top:0;">أيام إضافية قديمة (لكل المجموعات)</h2>
+    <p class="mini-note" style="margin-bottom:8px;">هاي أيام انضافت سابقًا على النادي كله — لسا شغالة وما انحذفت. الأيام الجديدة بتنضاف لكل مجموعة لحالها.</p>
     <div class="card" style="padding:10px 14px;overflow-x:auto;margin-bottom:18px;"><table class="compact"><thead><tr><th>التاريخ</th><th>اليوم</th><th>ملاحظة</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 function addExtraDay(pid){
@@ -1543,10 +1606,15 @@ function announcementsPageHTML(){
     </div>`).join('') || `<p class="mini-note">لا توجد إعلانات حاليًا.</p>`;
   return `
     <div class="pagehead">
-      <div><h1>الإعلانات</h1><p>أي إعلان تنشره هون بيظهر فورًا لكل الطلاب بصفحتهم الشخصية</p></div>
-      <button class="btn btn-primary" onclick="openModal('addAnnouncement')">+ إعلان جديد</button>
+      <div><h1>الإعلانات والاستبيانات</h1><p>الإعلان بيظهر فورًا لكل الطلاب بصفحتهم. والاستبيان (رحلة، استفتاء أهالي...) بيجاوب عليه الأهل من صفحة الطالب، وبتشوف النتائج هون.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-ghost" onclick="openModal('addSurvey')">+ استبيان جديد</button>
+        <button class="btn btn-primary" onclick="openModal('addAnnouncement')">+ إعلان جديد</button>
+      </div>
     </div>
     ${rows}
+    <h2 class="section-title">📋 الاستبيانات</h2>
+    ${surveysAdminHTML()}
   `;
 }
 function deleteAnnouncement(id){
@@ -1928,14 +1996,15 @@ const SESSION_HEAD = '<th>الحضور</th><th>السورة</th><th>من آية<
 function attendanceTableInnerHTML(id, programId){
   const p = PROGRAMS.find(x=>x.id===programId);
   if(!p) return '';
-  const dates = programSessionDates(p);
+  const stForDates = STUDENTS.find(s=>s.id===id);
+  const dates = programSessionDates(p, stForDates && stForDates.groupId);
   if(!dates.length) return `<p class="mini-note">حدّد تاريخ البداية والنهاية لهذا البرنامج من تبويب "البرامج والدورات" ليظهر جدول الأيام هون.</p>`;
   const st = STUDENTS.find(s=>s.id===id);
   const att = (st.attendance && st.attendance[programId]) || {};
   const rows = dates.map(d=>{
     const rec = att[d] || {};
     return `<tr>
-      <td style="white-space:nowrap;">${d}<div class="mini-note">${dayNameOf(d)}${isExtraDay(p,d)?' · يوم إضافي':''}</div></td>
+      <td style="white-space:nowrap;">${d}<div class="mini-note">${dayNameOf(d)}${isExtraDay(p,d,stForDates&&stForDates.groupId)?' · يوم إضافي':''}</div></td>
       ${sessionCellsHTML(id, programId, d, rec, 'a:'+d, false)}
       <td><input class="mini-input" style="min-width:110px;" value="${esc(rec.signature||'')}" placeholder="توقيع المعلم" onchange="saveSessionField('${id}','${programId}','${d}','signature',this.value)"></td>
       <td><input class="mini-input" style="min-width:120px;" value="${esc(rec.notes||'')}" placeholder="ملاحظات" onchange="saveSessionField('${id}','${programId}','${d}','notes',this.value)"></td>
@@ -2126,7 +2195,7 @@ function openModal(kind, arg){
       <div class="field"><label>الاسم (للعرض)</label><input id="naName"></div>
       <div class="field"><label>اسم المستخدم (للدخول)</label><input id="naUser" style="direction:ltr;text-align:left;"></div>
       <div class="field"><label>كلمة السر</label><input id="naPass" style="direction:ltr;text-align:left;"></div>
-      ${isMainAdmin()? `<div class="field"><label>الدور</label><select id="naRole"><option value="limited">مسؤول محدود (حسب الصلاحيات)</option><option value="full">مسؤول كبير (صلاحية كاملة)</option></select></div>` : ''}
+      ${isSuper()? `<div class="field"><label>الدور</label><select id="naRole"><option value="limited">مسؤول محدود (حسب الصلاحيات)</option><option value="full">مسؤول كبير (صلاحية كاملة)</option></select></div>` : ''}
       <p class="mini-note">المسؤول الجديد بيبدأ بصلاحيات اطلاع محدودة وبدون مجموعات. بعد الإضافة اضغط "الصلاحيات" جنب اسمه لتحديد مجموعاته وشو يشوف وشو يعدّل.</p>
       <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button>
       <button class="btn btn-primary" onclick="submitAdmin()">إضافة</button></div>`;
@@ -2249,7 +2318,7 @@ function submitAdmin(){
   if(!name || !username || !pass) return toast('عبّي الاسم واسم المستخدم وكلمة السر');
   if(ADMINS.some(a=>adminUsername(a).toLowerCase()===username.toLowerCase())) return toast('اسم المستخدم مستخدم من قبل');
   const roleSel = document.getElementById('naRole');
-  const role = (roleSel && roleSel.value==='full' && isMainAdmin()) ? 'full' : 'limited';
+  const role = (roleSel && roleSel.value==='full' && isSuper()) ? 'full' : 'limited';
   db.collection('admins').add({name, username, password:pass, role, perms:{...DEFAULT_LIMITED_PERMS}, scope:'own', groupIds:[], canDelete:false, seeContact:false, seeStudentPass:false, canViewCreds:false, createdAt:Date.now()})
     .then(()=>{closeModal();toast('تمت الإضافة — اضبط صلاحياته من زر "الصلاحيات"');});
 }
@@ -2315,7 +2384,7 @@ function renderStudentView(){
     const myPrograms = PROGRAMS.filter(pr=>myProgIds.includes(pr.id));
     const dayNames = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
     attendanceViewHTML = myPrograms.map(pr=>{
-      const dates = programSessionDates(pr);
+      const dates = programSessionDates(pr, st.groupId);
       const att = (st.attendance && st.attendance[pr.id]) || {};
       const rows = dates.map(d=>{
         const rec = att[d] || {status:'', signature:'', notes:''};
@@ -2373,7 +2442,9 @@ function renderStudentView(){
     </div>
 
     ${unreadCount()? `<div class="card" style="padding:12px 18px;margin-bottom:14px;cursor:pointer;border-top:3px solid var(--emerald-600);" onclick="openNotifications()">🔔 <b>عندك ${unreadCount()} إشعار جديد</b> — اضغط للعرض</div>` : ''}
+    ${pendingSurveysCount(st)? `<div class="card" style="padding:12px 18px;margin-bottom:14px;cursor:pointer;border-top:3px solid var(--gold-500);" onclick="scrollToSurveys()">📋 <b>عندك ${pendingSurveysCount(st)} استبيان بانتظار ردّك</b> — اضغط للإجابة</div>` : ''}
     ${myNotesViewHTML(st.id)}
+    ${mySurveysHTML(st)}
     ${p.done>=114 ? `<div class="card" style="padding:14px 18px;margin-bottom:16px;border-top:3px solid var(--gold-500);">🏅 <b>ما شاء الله، ختمتَ القرآن الكريم كاملًا</b> — اسمك في قائمة الشرف.</div>` : ''}
     ${attendanceViewHTML? `<h2 class="serif" style="font-size:17px;color:var(--emerald-800);">📅 الحضور والغياب والتسميع</h2>${attendanceViewHTML}` : ''}
 
@@ -2877,7 +2948,7 @@ function buildReportInner(type, p){
     let att='';
     studentProgramIds(s).forEach(pid=>{
       const pg=PROGRAMS.find(x=>x.id===pid); if(!pg) return;
-      const rows = programSessionDates(pg).map(d=>{ const r=(((s.attendance||{})[pid])||{})[d]||{}; const en=dayEntriesFilled(r); const J=f=>en.map(f).join('<br>'); return [d,dayNameOf(d),statusTxt(r.status),J(e=>esc(surahName(e.surah))),J(e=>e.from||''),J(e=>e.to||''),J(e=>esc(e.grade||'')),J(e=>e.finished?'✓':''),esc(r.signature||''),esc(r.notes||'')]; });
+      const rows = programSessionDates(pg, s.groupId).map(d=>{ const r=(((s.attendance||{})[pid])||{})[d]||{}; const en=dayEntriesFilled(r); const J=f=>en.map(f).join('<br>'); return [d,dayNameOf(d),statusTxt(r.status),J(e=>esc(surahName(e.surah))),J(e=>e.from||''),J(e=>e.to||''),J(e=>esc(e.grade||'')),J(e=>e.finished?'✓':''),esc(r.signature||''),esc(r.notes||'')]; });
       att += `<h3>الحضور والتسميع — ${esc(programLabel(pg))}</h3>` + rpTable(['التاريخ','اليوم','الحضور','السورة','من','إلى','التقدير','ختمها','التوقيع','ملاحظات'],rows,'حضور '+programLabel(pg),'compact');
     });
     return R('سجل الطالب — '+(s.fullName||s.name), `${info}<h3>سجل الحفظ</h3>${rpTable(['#','السورة','الحالة','التقدير','تاريخ الحفظ','الدورة'],mrows,'الحفظ')}${att}`, 'سجل-'+(s.fullName||s.name));
@@ -2894,7 +2965,7 @@ function buildReportInner(type, p){
   }
   if(type==='attendanceSheet'){
     const pr = PROGRAMS.find(x=>x.id===p.pid); if(!pr) return R('كشف الحضور','<p>لا يوجد</p>');
-    const dates = programSessionDates(pr);
+    const dates = p.gid ? programSessionDates(pr, p.gid) : programDatesUnion(pr);
     const studs = (p.gid? STUDENTS.filter(s=>s.groupId===p.gid) : STUDENTS.filter(s=>studentInProgram(s,pr.id))).sort(byName);
     const head = ['#','الطالب',...dates.map(d=>`${d.slice(5)}<br>${dayNameOf(d)}`),'حضور','غياب'];
     const rows = studs.map((s,i)=>{ let a=0,b=0; const cells=dates.map(d=>{ const r=(((s.attendance||{})[pr.id])||{})[d]||{}; if(r.status==='present'){a++;return 'ح';} if(r.status==='absent'){b++;return 'غ';} return ''; }); return [i+1,sn(s),...cells,a,b]; });
@@ -2937,6 +3008,11 @@ function buildReportInner(type, p){
     const t2 = rpTable(['التاريخ','اليوم','الموضوع','امتحان','ملاحظات'],les.map(x=>[esc(x.date||''),x.date?dayNameOf(x.date):'',esc(x.topic||''),x.isExam?esc('نعم '+(x.exam||'')):'',esc(x.notes||'')]),'الدروس');
     return R('كشف التجويد'+(lv?' — '+lv.name:''), `${t1}<h3>الدروس والامتحانات${lv?' — '+esc(lv.name):''}</h3>${t2}`, 'كشف-التجويد');
   }
+  if(type==='surveyResults'){
+    const sv = SURVEYS.find(x=>x.id===p.svid); if(!sv) return R('نتائج استبيان','<p>لا يوجد</p>');
+    const r = surveyResultsReport(sv);
+    return R(r.title, r.html, 'نتائج-'+sv.title, 'landscape');
+  }
   if(type==='fullSystem'){
     const parts=[];
     ['m','f'].forEach(g=>{ const list=STUDENTS.filter(s=>(s.gender||'m')===g).sort(byName); parts.push(`<h3>الكشف العام — ${genderLabel(g)}</h3>`+rpTable(['#','الاسم الرباعي','تاريخ الميلاد','تاريخ الانتساب','الهاتف','العنوان','المجموعة','المحفوظ'],list.map((s,i)=>[i+1,sn(s),ctt(s.dob),esc(s.joinDate||''),ctt(s.phone),ctt(s.address),esc(groupNameById(s.groupId)),studentProgress(s).done+' / 114']),'الكشف '+genderLabel(g))); });
@@ -2967,6 +3043,7 @@ const REPORT_TYPES = [
   {id:'programSummary', label:'ملخص دورة / نادي', params:['pid']},
   {id:'honorSheet', label:'قائمة الشرف (حفظة المصحف كاملًا)', params:['gender']},
   {id:'tajweedSheet', label:'كشف التجويد', params:['lid']},
+  {id:'surveyResults', label:'نتائج استبيان', params:['svid']},
   {id:'fullSystem', label:'تقرير شامل لكل النظام', params:[]},
 ];
 function rpDefault(name){
@@ -2976,7 +3053,8 @@ function rpDefault(name){
   if(name==='gidOpt') return '';
   if(name==='pid') return (PROGRAMS.slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''))[0]||{}).id;
   if(name==='lid') return (TAJ_LEVELS[0]||{}).id;
-  if(name==='date'){ const pr=PROGRAMS.find(x=>x.id===(reportParams.pid||rpDefault('pid'))); return (programSessionDates(pr)[0])||''; }
+  if(name==='svid') return (SURVEYS.slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0))[0]||{}).id;
+  if(name==='date'){ const pr=PROGRAMS.find(x=>x.id===(reportParams.pid||rpDefault('pid'))); return (programSessionDates(pr, reportParams.gid||rpDefault('gid'))[0])||''; }
 }
 function rpVal(name){ const v = reportParams[name]; return (v===undefined||v===null) ? rpDefault(name) : v; }
 function rpParamHTML(name){
@@ -2987,8 +3065,9 @@ function rpParamHTML(name){
   if(name==='gid') return sel('المجموعة',GROUPS.map(g=>`<option value="${g.id}" ${g.id===cur?'selected':''}>${esc(g.name)}</option>`).join(''));
   if(name==='gidOpt') return sel('المجموعة (اختياري)',`<option value="">كل طلاب الدورة</option>`+GROUPS.map(g=>`<option value="${g.id}" ${g.id===cur?'selected':''}>${esc(g.name)}</option>`).join(''));
   if(name==='pid') return sel('الدورة / النادي',PROGRAMS.slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||'')).map(x=>`<option value="${x.id}" ${x.id===cur?'selected':''}>${esc(programLabel(x))}</option>`).join(''));
+  if(name==='svid') return sel('الاستبيان',SURVEYS.slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).map(x=>`<option value="${x.id}" ${x.id===cur?'selected':''}>${esc(x.title)}</option>`).join(''));
   if(name==='lid') return sel('المستوى',TAJ_LEVELS.map(l=>`<option value="${l.id}" ${l.id===cur?'selected':''}>${esc(l.name)}</option>`).join(''));
-  if(name==='date'){ const pr=PROGRAMS.find(x=>x.id===rpVal('pid')); const ds=programSessionDates(pr); return sel('اليوم',ds.map(d=>`<option value="${d}" ${d===cur?'selected':''}>${d} — ${dayNameOf(d)}</option>`).join('')); }
+  if(name==='date'){ const pr=PROGRAMS.find(x=>x.id===rpVal('pid')); const ds=programSessionDates(pr, rpVal('gid')); return sel('اليوم',ds.map(d=>`<option value="${d}" ${d===cur?'selected':''}>${d} — ${dayNameOf(d)}</option>`).join('')); }
   return '';
 }
 function currentReportParams(rt){ const o={}; rt.params.forEach(n=>{ const k = n==='gidOpt'?'gid':n; o[k]=rpVal(n); }); return o; }
@@ -3034,7 +3113,7 @@ function reportDocHTML(rep, forWord){
   const fonts = forWord ? '' : '<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">';
   return `<!DOCTYPE html><html dir="rtl" lang="ar"${ns}><head><meta charset="utf-8"><title>${esc(rep.title)}</title>${fonts}<style>${RP_CSS}@page{size:A4 ${rep.orientation||'portrait'};margin:10mm}body{margin:0;padding:8px;background:#fff}</style></head><body>${html}</body></html>`;
 }
-const FILE_KEYS = {roster:'roster',studentCard:'student-record',groupSheet:'group-sheet',groupMemo:'group-memorization',attendanceSheet:'attendance',dailySheet:'daily-sheet',finalSheet:'final-recitation',courseClose:'course-close',programSummary:'program-summary',honorSheet:'honor-roll',tajweedSheet:'tajweed',fullSystem:'full-system',history:'memorization-search'};
+const FILE_KEYS = {roster:'roster',studentCard:'student-record',groupSheet:'group-sheet',groupMemo:'group-memorization',attendanceSheet:'attendance',dailySheet:'daily-sheet',finalSheet:'final-recitation',courseClose:'course-close',programSummary:'program-summary',honorSheet:'honor-roll',surveyResults:'survey-results',tajweedSheet:'tajweed',fullSystem:'full-system',history:'memorization-search'};
 function safeFileBase(rep){ return 'isra-' + (FILE_KEYS[rep.fileKey] || 'report') + '-' + fmtLocalDate(new Date()); }
 function downloadBlob(blob, filename){
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename;
@@ -3091,7 +3170,7 @@ function exportCurrent(kind){
 /* =========================================================
    النسخ الاحتياطي: تنزيل يدوي + استعادة + نسخ تلقائي لملف على الحاسوب
    ========================================================= */
-const BACKUP_COLLECTIONS = [['groups',()=>GROUPS],['students',()=>STUDENTS],['admins',()=>ADMINS],['cycles',()=>CYCLES],['programs',()=>PROGRAMS],['announcements',()=>ANNOUNCEMENTS],['honor',()=>HONOR],['tajweedLevels',()=>TAJ_LEVELS],['tajweedLessons',()=>TAJ_LESSONS],['finalSheets',()=>FINALS],['notifications',()=>NOTIFS],['studentNotes',()=>NOTES]];
+const BACKUP_COLLECTIONS = [['groups',()=>GROUPS],['students',()=>STUDENTS],['admins',()=>ADMINS],['cycles',()=>CYCLES],['programs',()=>PROGRAMS],['announcements',()=>ANNOUNCEMENTS],['honor',()=>HONOR],['tajweedLevels',()=>TAJ_LEVELS],['tajweedLessons',()=>TAJ_LESSONS],['finalSheets',()=>FINALS],['notifications',()=>NOTIFS],['studentNotes',()=>NOTES],['surveys',()=>SURVEYS],['surveyResponses',()=>SURVEY_RESP]];
 function collectAllData(){
   const cols = {};
   BACKUP_COLLECTIONS.forEach(([name,get])=>{ cols[name] = get().map(d=>({...d})); });
@@ -3207,6 +3286,38 @@ function backupCardHTML(){
   openModal = function(kind, arg){
     orig(kind, arg);
     const body = document.getElementById('modalBody');
+    if(kind==='addSurvey'){
+      svDraft = [newSvQuestion()];
+      const canAll = adminScope()==='all';
+      body.style.maxWidth = '720px';
+      body.innerHTML = `<button class="close-x" onclick="closeModal()">✕</button><h2>استبيان جديد</h2>
+        <div class="field"><label>عنوان الاستبيان</label><input id="svTitle" placeholder="مثال: رحلة نهاية الفصل — الموافقة"></div>
+        <div class="field"><label>وصف / تفاصيل (اختياري)</label><textarea id="svDesc" style="height:70px;" placeholder="مثال: الرحلة يوم الجمعة 10/10 الساعة 8 صباحًا، التكلفة 5 دنانير"></textarea></div>
+        <div class="row2">
+          <div class="field"><label>الجمهور</label><select id="svAudience" onchange="document.getElementById('svGroups').style.display=this.value==='groups'?'block':'none'">
+            ${canAll? '<option value="all">كل الطلاب (الأهالي)</option>' : ''}<option value="groups" ${canAll?'':'selected'}>مجموعات محددة</option></select></div>
+          <div class="field"><label>آخر موعد للإجابة (اختياري)</label><input type="date" id="svDeadline"></div>
+        </div>
+        <div id="svGroups" class="field" style="display:${canAll?'none':'block'};"><label>اختر المجموعات</label>
+          <div style="max-height:120px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px 12px;">${GROUPS.map(g=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:6px;"><input type="checkbox" class="svGrp" value="${g.id}" style="width:auto;"> ${esc(g.name)}</label>`).join('') || '<span class="mini-note">لا توجد مجموعات</span>'}</div></div>
+        <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:10px;"><input type="checkbox" id="svAllowEdit" style="width:auto;" checked> يقدر ولي الأمر يعدّل إجابته قبل إغلاق الاستبيان</label>
+        <div style="font-weight:700;margin:10px 0 6px;">الأسئلة</div>
+        <div id="svQuestions"></div>
+        <button class="btn btn-ghost btn-sm" onclick="svAddQuestion()">+ سؤال</button>
+        <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button><button class="btn btn-primary" onclick="submitSurvey()">نشر الاستبيان</button></div>`;
+      renderSvQuestions();
+    }
+    if(kind==='editSurvey'){
+      const sv = SURVEYS.find(x=>x.id===arg); if(!sv) return;
+      body.innerHTML = `<button class="close-x" onclick="closeModal()">✕</button><h2>تعديل الاستبيان</h2>
+        <p class="mini-note">تعديل العنوان والوصف والموعد فقط. لتغيير الأسئلة، اعمل استبيان جديد (حتى ما تضيع الردود الحالية).</p>
+        <div class="field"><label>العنوان</label><input id="esTitle" value="${esc(sv.title)}"></div>
+        <div class="field"><label>الوصف</label><textarea id="esDesc" style="height:70px;">${esc(sv.description||'')}</textarea></div>
+        <div class="field"><label>آخر موعد للإجابة</label><input type="date" id="esDeadline" value="${esc(sv.deadline||'')}"></div>
+        <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:10px;"><input type="checkbox" id="esAllowEdit" style="width:auto;" ${sv.allowEdit!==false?'checked':''}> يقدر ولي الأمر يعدّل إجابته</label>
+        <input type="hidden" id="esId" value="${sv.id}">
+        <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button><button class="btn btn-primary" onclick="submitEditSurvey()">حفظ</button></div>`;
+    }
     if(kind==='adminPerms'){
       const a = ADMINS.find(x=>x.id===arg); if(!a) return;
       const ep = effPerms(a); const sc = effScope(a); const gids = a.groupIds||[];
@@ -3217,7 +3328,7 @@ function backupCardHTML(){
       body.innerHTML = `<button class="close-x" onclick="closeModal()">✕</button><h2>صلاحيات: ${esc(a.name)}</h2>
         <div class="field"><label>الدور</label><select id="apRole" onchange="document.getElementById('apLimited').style.display=this.value==='full'?'none':'block'">
           <option value="limited" ${!isFull?'selected':''}>مسؤول محدود (حسب الصلاحيات أدناه)</option>
-          <option value="full" ${isFull?'selected':''} ${isMainAdmin()?'':'disabled'}>مسؤول كبير — صلاحية كاملة بكل شي ${isMainAdmin()?'':'(للمشرف الرئيسي فقط)'}</option></select></div>
+          <option value="full" ${isFull?'selected':''}>مسؤول كبير — صلاحية كاملة بكل شي (مثل المشرف الرئيسي)</option></select></div>
         <div id="apLimited" style="display:${isFull?'none':'block'};">
           <div class="toolbar" style="margin-bottom:10px;"><span class="mini-note">قوالب جاهزة:</span>
             <button class="btn btn-ghost btn-sm" onclick="applyPermPreset('view')">اطلاع فقط</button>
@@ -3243,7 +3354,7 @@ function backupCardHTML(){
     if(kind==='adminProfile'){
       const a = ADMINS.find(x=>x.id===arg); if(!a) return;
       const p = a.profile || {};
-      const editable = a.id===session.id || (isSuper() && a.id!==mainAdminId() && (a.role!=='full' || isMainAdmin()));
+      const editable = a.id===session.id || (isSuper() && a.id!==mainAdminId());
       const dis = editable ? '' : 'disabled';
       body.innerHTML = `<button class="close-x" onclick="closeModal()">✕</button><h2>الملف الشخصي: ${esc(a.name)}</h2>
         <div class="row2"><div class="field"><label>الاسم الكامل</label><input id="apfName" ${dis} value="${esc(p.fullName||'')}"></div>
@@ -3305,15 +3416,21 @@ function notifyProgress(stId, items){
     e.chain = pushNotif({to:stId, type:'progress', title:'تحديث على سجل حفظك', body:bodyOf()}).then(ref=>{ e.id = ref && ref.id; });
   }
 }
+function notifForMe(n){
+  if(!session || session.role!=='student') return false;
+  if(n.to==='all' || n.to===session.id) return true;
+  const st = STUDENTS.find(s=>s.id===session.id);
+  return !!(st && st.groupId && n.to==='group:'+st.groupId);
+}
 function myNotifs(){
   if(!session || session.role!=='student') return [];
-  return NOTIFS.filter(n=>n.to==='all' || n.to===session.id).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  return NOTIFS.filter(notifForMe).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
 }
 function seenTs(){ return Number(localStorage.getItem('isra_seen_'+(session?session.id:''))||0); }
 function unreadCount(){ const t = seenTs(); return myNotifs().filter(n=>(n.createdAt||0)>t).length; }
 function incomingNotif(n){
   if(!session || session.role!=='student') return;
-  if(!(n.to==='all' || n.to===session.id)) return;
+  if(!notifForMe(n)) return;
   toast('🔔 '+n.title+(n.body? ': '+n.body : ''), 7000);
   try{
     if('Notification' in window && Notification.permission==='granted' && document.hidden){
@@ -3324,10 +3441,11 @@ function incomingNotif(n){
 function openNotifications(){
   const t = seenTs();
   const list = myNotifs();
-  const icon = {announcement:'📢', note:'📝', progress:'📖'};
+  const icon = {announcement:'📢', note:'📝', progress:'📖', survey:'📋'};
   const items = list.map(n=>`<div class="card" style="padding:12px 14px;margin-bottom:8px;${(n.createdAt||0)>t?'border-inline-start:4px solid var(--emerald-600);':''}">
       <div style="font-weight:700;">${icon[n.type]||'🔔'} ${esc(n.title||'')}</div>
       ${n.body? `<div style="font-size:13.5px;color:var(--ink-600);margin-top:3px;white-space:pre-wrap;">${esc(n.body)}</div>`:''}
+      ${n.type==='survey'? `<button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="closeModal();scrollToSurveys()">الإجابة على الاستبيان</button>` : ''}
       <div class="mini-note" style="margin-top:4px;">${fmtTs(n.createdAt||0)}</div></div>`).join('') || '<p class="mini-note">لا توجد إشعارات بعد.</p>';
   const canAsk = ('Notification' in window) && Notification.permission==='default';
   const body = document.getElementById('modalBody');
@@ -3369,6 +3487,229 @@ function myNotesViewHTML(stId){
   const list = NOTES.filter(n=>n.studentId===stId).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
   if(!list.length) return '';
   return `<h2 class="serif" style="font-size:17px;color:var(--emerald-800);">📝 ملاحظات من المسؤول</h2>` + list.map(n=>`<div class="card" style="padding:12px 16px;margin-bottom:8px;"><div style="white-space:pre-wrap;font-size:14px;">${esc(n.text)}</div><div class="mini-note" style="margin-top:4px;">${esc(n.by||'')} · ${fmtTs(n.createdAt||0)}</div></div>`).join('');
+}
+
+/* =========================================================
+   الاستبيانات: المسؤول بيعمل استبيان، والأهل بيجاوبوا من صفحة الطالب
+   ========================================================= */
+const Q_TYPES = [['single','اختيار واحد'],['multi','اختيارات متعددة'],['yesno','نعم / لا'],['rating','تقييم من 1 إلى 5'],['text','إجابة نصية']];
+function surveyOpen(sv){ const today = fmtLocalDate(new Date()); return !sv.closed && (!sv.deadline || sv.deadline>=today); }
+function surveyAppliesTo(sv, st){
+  if(!sv || !st) return false;
+  if(sv.audience==='groups') return !!st.groupId && (sv.groupIds||[]).includes(st.groupId);
+  return true;
+}
+function respOf(svId, stId){ return SURVEY_RESP.find(r=>r.surveyId===svId && r.studentId===stId); }
+function qOptions(q){ return q.type==='yesno' ? ['نعم','لا'] : q.type==='rating' ? ['1','2','3','4','5'] : (q.options||[]); }
+function audienceText(sv){
+  if(sv.audience!=='groups') return 'كل الطلاب';
+  const names = (sv.groupIds||[]).map(id=>{ const g = RAW_GROUPS.find(x=>x.id===id); return g? g.name : null; }).filter(Boolean);
+  return 'مجموعات: ' + (names.join('، ') || '—');
+}
+function surveyStats(sv){
+  const elig = STUDENTS.filter(s=>surveyAppliesTo(sv, s));
+  const ids = new Set(elig.map(s=>s.id));
+  const answered = SURVEY_RESP.filter(r=>r.surveyId===sv.id && ids.has(r.studentId)).length;
+  return {total: elig.length, answered};
+}
+
+/* ---- جهة المسؤول ---- */
+function surveysAdminHTML(){
+  const list = SURVEYS.slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  if(!list.length) return '<p class="mini-note">لا توجد استبيانات بعد.</p>';
+  return list.map(sv=>{
+    const st = surveyStats(sv); const open = surveyOpen(sv);
+    return `<div class="card" style="padding:14px 16px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:700;">${esc(sv.title)} ${open? '<span class="tag" style="background:#e4efe8;color:var(--emerald-700);">مفتوح</span>' : '<span class="tag">مغلق</span>'}</div>
+          ${sv.description? `<div style="font-size:13px;color:var(--ink-600);margin-top:3px;white-space:pre-wrap;">${esc(sv.description)}</div>` : ''}
+          <div class="mini-note" style="margin-top:5px;">${esc(audienceText(sv))} · ${(sv.questions||[]).length} سؤال · أجاب ${st.answered} من ${st.total}${sv.deadline? ' · ينتهي '+esc(sv.deadline) : ''} · ${esc((sv.date)||'')}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="openReportModal('surveyResults',{svid:'${sv.id}'})">📊 النتائج / طباعة</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleSurveyOpen('${sv.id}')">${sv.closed? 'إعادة فتح' : 'إغلاق'}</button>
+          <button class="btn btn-ghost btn-sm" onclick="openModal('editSurvey','${sv.id}')">✎ تعديل</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteSurvey('${sv.id}','${esc(sv.title).replace(/'/g,'')}')">حذف</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+function toggleSurveyOpen(id){
+  const sv = SURVEYS.find(x=>x.id===id); if(!sv) return;
+  db.collection('surveys').doc(id).update({closed: !sv.closed}).then(()=>toast(sv.closed? 'تمت إعادة فتح الاستبيان' : 'تم إغلاق الاستبيان'));
+}
+function deleteSurvey(id, name){
+  if(!confirm(`حذف الاستبيان "${name}" وكل ردوده؟ لا يمكن التراجع.`)) return;
+  SURVEY_RESP.filter(r=>r.surveyId===id).forEach(r=>db.collection('surveyResponses').doc(r.id).delete());
+  NOTIFS.filter(n=>n.refId===id).forEach(n=>db.collection('notifications').doc(n.id).delete());
+  db.collection('surveys').doc(id).delete().then(()=>toast('تم حذف الاستبيان'));
+}
+let svDraft = [];
+function newSvQuestion(){ return {text:'', type:'single', options:'', required:true}; }
+function renderSvQuestions(){
+  const w = document.getElementById('svQuestions'); if(!w) return;
+  w.innerHTML = svDraft.map((q,i)=>`<div class="card" style="padding:10px 12px;margin-bottom:8px;">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+      <b style="min-width:22px;">${i+1}.</b>
+      <input value="${esc(q.text)}" placeholder="نص السؤال" onchange="svSetQ(${i},'text',this.value)">
+      <button class="btn btn-danger btn-sm" title="حذف السؤال" onclick="svRemoveQuestion(${i})">✕</button>
+    </div>
+    <div class="toolbar" style="margin-bottom:6px;">
+      <select style="width:auto;" onchange="svSetQ(${i},'type',this.value);renderSvQuestions();">${Q_TYPES.map(([v,l])=>`<option value="${v}" ${q.type===v?'selected':''}>${l}</option>`).join('')}</select>
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin:0;"><input type="checkbox" style="width:auto;" ${q.required?'checked':''} onchange="svSetQ(${i},'required',this.checked)"> مطلوب</label>
+    </div>
+    ${(q.type==='single'||q.type==='multi')? `<textarea style="height:70px;" placeholder="الخيارات — كل خيار بسطر" onchange="svSetQ(${i},'options',this.value)">${esc(q.options)}</textarea>` : ''}
+  </div>`).join('') || '<p class="mini-note">ما في أسئلة بعد — اضغط "+ سؤال".</p>';
+}
+function svSetQ(i, f, v){ if(svDraft[i]) svDraft[i][f] = v; }
+function svRemoveQuestion(i){ svDraft.splice(i,1); renderSvQuestions(); }
+function svAddQuestion(){ svDraft.push(newSvQuestion()); renderSvQuestions(); }
+function submitSurvey(){
+  const title = document.getElementById('svTitle').value.trim();
+  if(!title) return toast('اكتب عنوان الاستبيان');
+  const description = document.getElementById('svDesc').value.trim();
+  const deadline = document.getElementById('svDeadline').value;
+  const allowEdit = document.getElementById('svAllowEdit').checked;
+  const audience = document.getElementById('svAudience').value;
+  const groupIds = Array.from(document.querySelectorAll('.svGrp:checked')).map(x=>x.value);
+  if(audience==='groups' && !groupIds.length) return toast('اختر مجموعة واحدة على الأقل');
+  if(!svDraft.length) return toast('أضف سؤالًا واحدًا على الأقل');
+  const questions = [];
+  for(let i=0;i<svDraft.length;i++){
+    const q = svDraft[i]; const text = (q.text||'').trim();
+    if(!text) return toast(`اكتب نص السؤال رقم ${i+1}`);
+    let options = [];
+    if(q.type==='single' || q.type==='multi'){
+      options = String(q.options||'').split('\n').map(x=>x.trim()).filter(Boolean);
+      if(options.length<2) return toast(`السؤال رقم ${i+1} لازم يكون له خيارين على الأقل`);
+    }
+    questions.push({id:'q'+(i+1), text, type:q.type, required:!!q.required, options});
+  }
+  const rec = {title, description, deadline, allowEdit, audience, groupIds: audience==='groups'? groupIds : [], questions, closed:false, createdAt:Date.now(), date:fmtLocalDate(new Date()), createdBy:(session&&session.name)||''};
+  db.collection('surveys').add(rec).then(ref=>{
+    const body = description || 'اضغط لعرض الاستبيان والإجابة عليه';
+    const targets = audience==='groups' ? groupIds.map(g=>'group:'+g) : ['all'];
+    targets.forEach(to=>pushNotif({to, type:'survey', title:'استبيان جديد: '+title, body: body.length>160? body.slice(0,160)+'…' : body, refId: ref && ref.id}));
+    closeModal(); toast('تم نشر الاستبيان وأُرسل إشعار للأهالي');
+  });
+}
+function submitEditSurvey(){
+  const id = document.getElementById('esId').value;
+  const title = document.getElementById('esTitle').value.trim();
+  if(!title) return toast('اكتب عنوان الاستبيان');
+  db.collection('surveys').doc(id).update({title, description:document.getElementById('esDesc').value.trim(), deadline:document.getElementById('esDeadline').value, allowEdit:document.getElementById('esAllowEdit').checked})
+    .then(()=>{ closeModal(); toast('تم الحفظ'); });
+}
+
+/* ---- جهة الطالب / ولي الأمر ---- */
+function pendingSurveysCount(st){
+  return SURVEYS.filter(sv=>surveyAppliesTo(sv, st) && surveyOpen(sv) && !respOf(sv.id, st.id)).length;
+}
+function scrollToSurveys(){ const e = document.getElementById('surveysSection'); if(e) e.scrollIntoView({behavior:'smooth', block:'start'}); }
+function mySurveysHTML(st){
+  const list = SURVEYS.filter(sv=>surveyAppliesTo(sv, st)).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  if(!list.length) return '';
+  return `<h2 class="serif" id="surveysSection" style="font-size:17px;color:var(--emerald-800);">📋 استبيانات المركز</h2>` + list.map(sv=>surveyCardHTML(sv, st)).join('');
+}
+function surveyInputHTML(sv, q, ans, disabled){
+  const nm = `sq_${sv.id}_${q.id}`;
+  const dis = disabled ? 'disabled' : '';
+  if(q.type==='text') return `<textarea data-sv="${sv.id}" data-q="${q.id}" ${dis} style="height:70px;" placeholder="اكتب إجابتك...">${esc(typeof ans==='string'? ans : '')}</textarea>`;
+  const multi = q.type==='multi';
+  const cur = multi ? (Array.isArray(ans)? ans : []) : ans;
+  const inline = q.type==='rating' || q.type==='yesno';
+  return `<div style="${inline?'display:flex;gap:16px;flex-wrap:wrap;':''}">` + qOptions(q).map(o=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:6px;font-size:14px;">
+      <input type="${multi?'checkbox':'radio'}" name="${nm}" value="${esc(o)}" data-sv="${sv.id}" data-q="${q.id}" style="width:auto;" ${dis} ${multi ? (cur.includes(o)?'checked':'') : (cur===o?'checked':'')}> ${esc(o)}</label>`).join('') + `</div>`;
+}
+function surveyCardHTML(sv, st){
+  const resp = respOf(sv.id, st.id);
+  const open = surveyOpen(sv);
+  const canAnswer = open && (!resp || sv.allowEdit!==false);
+  const badge = !open ? '<span class="tag">مغلق</span>' : (resp ? '<span class="tag" style="background:#e4efe8;color:var(--emerald-700);">تم الرد ✓</span>' : '<span class="tag" style="background:#fdf1d8;color:#8a6a12;">بانتظار ردّك</span>');
+  const qs = (sv.questions||[]).map((q,i)=>`<div style="margin:12px 0;">
+      <div style="font-weight:700;margin-bottom:6px;">${i+1}. ${esc(q.text)}${q.required? ' <span style="color:var(--red-600);">*</span>' : ''}</div>
+      ${surveyInputHTML(sv, q, resp && resp.answers ? resp.answers[q.id] : undefined, !canAnswer)}
+    </div>`).join('');
+  return `<div class="card" style="padding:14px 18px;margin-bottom:12px;">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;"><div style="font-weight:700;font-size:15.5px;">${esc(sv.title)}</div>${badge}</div>
+    ${sv.description? `<div style="font-size:13.5px;color:var(--ink-600);margin-top:4px;white-space:pre-wrap;">${esc(sv.description)}</div>` : ''}
+    ${sv.deadline? `<div class="mini-note" style="margin-top:3px;">آخر موعد للإجابة: ${esc(sv.deadline)}</div>` : ''}
+    ${qs}
+    ${canAnswer ? `<button class="btn btn-primary" onclick="submitSurveyAnswer('${sv.id}')">${resp? 'تحديث إجابتي' : 'إرسال الإجابة'}</button>` : (resp && open ? '<div class="mini-note">تم استلام إجابتك. (التعديل غير مفعّل لهذا الاستبيان)</div>' : (!open? '<div class="mini-note">الاستبيان مغلق — لا يمكن الإجابة أو التعديل.</div>' : ''))}
+  </div>`;
+}
+function submitSurveyAnswer(svId){
+  const sv = SURVEYS.find(x=>x.id===svId);
+  if(!sv || !session || session.role!=='student') return;
+  if(!surveyOpen(sv)) return toast('هذا الاستبيان مغلق');
+  const answers = {}; let missing = null;
+  (sv.questions||[]).forEach(q=>{
+    const els = Array.from(document.querySelectorAll(`#mainArea [data-sv="${svId}"][data-q="${q.id}"]`));
+    let v;
+    if(q.type==='multi') v = els.filter(e=>e.checked).map(e=>e.value);
+    else if(q.type==='text') v = els[0] ? els[0].value.trim() : '';
+    else { const ch = els.find(e=>e.checked); v = ch ? ch.value : ''; }
+    const empty = Array.isArray(v) ? v.length===0 : v==='';
+    if(q.required && empty && !missing) missing = q.text;
+    if(!empty) answers[q.id] = v;
+  });
+  if(missing) return toast('جاوب على السؤال المطلوب: '+missing, 4500);
+  db.collection('surveyResponses').doc(svId+'__'+session.id).set({surveyId:svId, studentId:session.id, answers, updatedAt:Date.now()})
+    .then(()=>toast('تم إرسال إجابتك — شكرًا لك', 4000));
+}
+/* حفظ مسودة الإجابة المكتوبة حتى لو انعاد رسم الصفحة (مثلًا وصل إشعار جديد) */
+function captureSurveyDraft(){
+  const d = {};
+  document.querySelectorAll('#mainArea [data-sv]').forEach(el=>{
+    if(el.disabled) return;
+    const k = el.dataset.sv+'|'+el.dataset.q;
+    if(el.type==='radio'){ if(!(k in d)) d[k] = null; if(el.checked) d[k] = el.value; }
+    else if(el.type==='checkbox'){ d[k] = d[k] || []; if(el.checked) d[k].push(el.value); }
+    else d[k] = el.value;
+  });
+  return d;
+}
+function restoreSurveyDraft(d){
+  document.querySelectorAll('#mainArea [data-sv]').forEach(el=>{
+    if(el.disabled) return;
+    const k = el.dataset.sv+'|'+el.dataset.q;
+    if(!(k in d)) return;
+    if(el.type==='radio') el.checked = (el.value===d[k]);
+    else if(el.type==='checkbox') el.checked = (d[k]||[]).includes(el.value);
+    else el.value = d[k];
+  });
+}
+
+/* ---- نتائج الاستبيان (تقرير قابل للطباعة والتصدير) ---- */
+function surveyResultsReport(sv){
+  const elig = STUDENTS.filter(s=>surveyAppliesTo(sv, s)).sort(byName);
+  const resp = {}; SURVEY_RESP.filter(r=>r.surveyId===sv.id).forEach(r=>{ resp[r.studentId] = r; });
+  const answered = elig.filter(s=>resp[s.id]);
+  const waiting = elig.filter(s=>!resp[s.id]);
+  const qs = sv.questions||[];
+  const info = rpKV([['العنوان',esc(sv.title)],['الوصف',esc(sv.description||'')],['الجمهور',esc(audienceText(sv))],['الحالة',surveyOpen(sv)?'مفتوح':'مغلق'],['آخر موعد',esc(sv.deadline||'—')],['عدد الردود',`${answered.length} من ${elig.length}`]],'معلومات الاستبيان');
+  const ansTxt = (q, a)=> a===undefined||a===null ? '' : (Array.isArray(a)? a.join('، ') : String(a));
+  let per = '';
+  qs.forEach((q,qi)=>{
+    const title = `${qi+1}. ${esc(q.text)}`;
+    if(q.type==='text'){
+      const rows = answered.map(s=>[sn(s), esc(groupNameById(s.groupId)), esc(ansTxt(q, (resp[s.id].answers||{})[q.id]))]).filter(r=>r[2]);
+      per += `<h3>${title}</h3>` + rpTable(['الطالب','المجموعة','الإجابة'], rows, `س${qi+1} إجابات`);
+    } else {
+      const counts = {}; qOptions(q).forEach(o=>{ counts[o]=0; });
+      let base = 0;
+      answered.forEach(s=>{ const a = (resp[s.id].answers||{})[q.id]; if(a===undefined) return; base++; (Array.isArray(a)? a : [a]).forEach(v=>{ if(v in counts) counts[v]++; }); });
+      const rows = qOptions(q).map(o=>{ const pct = base? Math.round(counts[o]/base*100) : 0; return [esc(o), counts[o], pct+'% '+'█'.repeat(Math.round(pct/10))]; });
+      per += `<h3>${title} <span class="mini">(${base} إجابة)</span></h3>` + rpTable(['الخيار','العدد','النسبة'], rows, `س${qi+1} ملخص`);
+    }
+  });
+  const detHead = ['#','الطالب','المجموعة', ...qs.map((q,i)=>`س${i+1}`)];
+  const det = rpTable(detHead, answered.map((s,i)=>[i+1, sn(s), esc(groupNameById(s.groupId)), ...qs.map(q=>esc(ansTxt(q, (resp[s.id].answers||{})[q.id])))]), 'تفاصيل الردود','compact');
+  const legend = qs.map((q,i)=>`س${i+1}: ${esc(q.text)}`).join(' | ');
+  const wait = rpTable(['#','الطالب','المجموعة'], waiting.map((s,i)=>[i+1, sn(s), esc(groupNameById(s.groupId))]), 'لم يجيبوا');
+  return {title:'نتائج استبيان — '+sv.title, html: `${info}<h3>ملخص الإجابات</h3>${per || '<p class="mini">لا أسئلة</p>'}<h3>تفاصيل الردود</h3><div class="mini">${legend}</div>${det}<h3>لم يجيبوا بعد (${waiting.length})</h3>${wait}`};
 }
 
 /* boot */
