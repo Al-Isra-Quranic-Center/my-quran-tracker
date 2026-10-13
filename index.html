@@ -703,7 +703,7 @@ function ctx(v){ return canSeeContact() ? esc(v||'—') : '<span class="mini-not
 function ctt(v){ return canSeeContact() ? esc(v||'') : 'مخفي'; }
 
 /* ---- قفل واجهة القراءة فقط: إخفاء أزرار/حقول التعديل حيث لا توجد صلاحية (الحارس بالأعلى يمنع الكتابة فعليًا) ---- */
-const WRITE_FN_RE = /(?:^|[^A-Za-z])(save[A-Za-z]*|update[A-Za-z]*|toggle[A-Za-z]*|submit[A-Za-z]*|delete[A-Za-z]*|unassign[A-Za-z]*|trueDelete[A-Za-z]*|setAdmin[A-Za-z]*|tajSetStatus|tajAdd|tajRemove|finalize[A-Za-z]*|addExtra[A-Za-z]*|removeExtra[A-Za-z]*|addStudentNote|restoreFromFile|linkBackupFile|resumeBackup|unlinkBackup|writeBackupNow|applyPerm[A-Za-z]*)\(/;
+const WRITE_FN_RE = /(?:^|[^A-Za-z])(save[A-Za-z]*|update[A-Za-z]*|toggle[A-Za-z]*|submit[A-Za-z]*|delete[A-Za-z]*|unassign[A-Za-z]*|trueDelete[A-Za-z]*|setAdmin[A-Za-z]*|tajSetStatus|tajAdd|tajRemove|finalize[A-Za-z]*|addExtra[A-Za-z]*|removeExtra[A-Za-z]*|addStudentNote|restoreFromFile|linkBackupFile|resumeBackup|unlinkBackup|writeBackupNow|applyPerm[A-Za-z]*|openAddStudentFromContacts)\(/;
 const WRITE_MODAL_RE = /openModal\('(?:add|edit|final)/;
 const DELETE_BTN_RE = /(?:deleteGroup|deleteProgram|deleteTajLevel|trueDeleteStudent)\(/;
 function lockContainer(root){
@@ -766,6 +766,8 @@ function studentWriteAllowed(id, data, op){
   const keys = Object.keys(data||{});
   const tajOnly = keys.length>0 && keys.every(k=>k==='inTajweed' || k.startsWith('tajweed'));
   if(tajOnly) return canEditSec('tajweed');
+  const progOnly = keys.length>0 && keys.every(k=>k==='programIds' || k==='programGroups');
+  if(progOnly && canEditSec('programs') && adminScope()==='all') return true;
   if(!(canEditSec('groups') || canEditSec('roster'))) return false;
   if(op==='add') return canEditGroupScope((data&&data.groupId)||null);
   if(op==='delete') return canDeleteStuff() && studentEditableById(id);
@@ -1061,6 +1063,19 @@ function programLabel(p){
 /* يدعم الحقل الجديد (مصفوفة programIds) والحقل القديم (programId مفرد) معًا لعدم فقدان أي بيانات سابقة */
 function studentProgramIds(s){ return s.programIds || (s.programId? [s.programId]: []); }
 function studentInProgram(s,pid){ return studentProgramIds(s).includes(pid); }
+/* مجموعة الطالب "بتلك الدورة" (تاريخية): إذا ما انحددت صراحةً بنرجع لمجموعته الحالية */
+function hasPG(st, pid){ return !!st.programGroups && Object.prototype.hasOwnProperty.call(st.programGroups, pid); }
+function studentGroupInProgram(s, pid){ return hasPG(s, pid) ? (s.programGroups[pid] || null) : (s.groupId || null); }
+function inGroupForProgram(s, pid, gid){ return studentInProgram(s, pid) ? studentGroupInProgram(s, pid)===gid : s.groupId===gid; }
+/* قبل ما ينتقل الطالب من مجموعته، نثبّت مجموعته القديمة للدورات اللي ما إلها مجموعة محددة (حتى ما يضيع تاريخه) */
+function freezePG(st, upd){
+  const ids = studentProgramIds(st);
+  if(!st || !st.groupId || !ids.length) return upd;
+  const pg = {...(st.programGroups||{})}; let changed = false;
+  ids.forEach(pid=>{ if(!hasPG(st,pid)){ pg[pid] = st.groupId; changed = true; } });
+  if(changed) upd.programGroups = pg;
+  return upd;
+}
 /* تنسيق تاريخ محلي (بدون تحويل UTC) لتفادي انزياح يوم واحد لأي توقيت شرق غرينتش */
 function fmtLocalDate(d){
   const y = d.getFullYear();
@@ -1124,7 +1139,7 @@ function maybeReassignGroup(id){
     return false;
   });
   if(match && match.id!==st.groupId){
-    db.collection('students').doc(id).update({groupId:match.id}).then(()=>{
+    db.collection('students').doc(id).update(freezePG(st,{groupId:match.id})).then(()=>{
       toast(`تم نقل ${st.fullName||st.name} تلقائيًا إلى مجموعة "${match.name}"`);
     });
   }
@@ -1156,7 +1171,7 @@ function groupsListHTML(){
 function deleteGroup(id,name){
   if(!confirm(`حذف مجموعة "${name}"؟ الطلاب بيضلوا محفوظين بالكشف العام، بس بيصيروا بدون مجموعة.`)) return;
   const batch = db.batch();
-  STUDENTS.filter(s=>s.groupId===id).forEach(s=> batch.update(db.collection('students').doc(s.id), {groupId:null}));
+  STUDENTS.filter(s=>s.groupId===id).forEach(s=> batch.update(db.collection('students').doc(s.id), freezePG(s,{groupId:null})));
   batch.delete(db.collection('groups').doc(id));
   batch.commit().then(()=>{ if(currentGroupId===id) currentGroupId=null; toast('تم حذف المجموعة'); });
 }
@@ -1209,8 +1224,7 @@ function groupDetailHTML(gid){
    كشف التسميع النهائي — خاص بكل مجموعة (كل دورة/نادي بيصير إله كشف منفصل لكل مجموعة فيه)
    --------------------------------------------------------- */
 function groupProgramOptions(gid){
-  const studs = STUDENTS.filter(s=>s.groupId===gid);
-  return PROGRAMS.filter(p=>studs.some(s=>studentInProgram(s,p.id)))
+  return PROGRAMS.filter(p=>STUDENTS.some(s=>studentInProgram(s,p.id) && studentGroupInProgram(s,p.id)===gid))
     .sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||''));
 }
 function finalSheetSectionHTML(gid){
@@ -1263,10 +1277,9 @@ function byName(a,b){ return (a.fullName||a.name||'').localeCompare((b.fullName|
 function ensureDailyDefaults(gid){
   if(!PROGRAMS.length) return;
   if(!dailyProgramId || !PROGRAMS.find(p=>p.id===dailyProgramId)){
-    const studs = STUDENTS.filter(s=>s.groupId===gid);
     let best=null, bestN=-1;
     PROGRAMS.forEach(p=>{
-      const n = studs.filter(s=>studentInProgram(s,p.id)).length;
+      const n = STUDENTS.filter(s=>inGroupForProgram(s,p.id,gid)).length;
       if(n>bestN || (n===bestN && best && (p.startDate||'')>(best.startDate||''))){ best=p; bestN=n; }
     });
     dailyProgramId = best.id; dailyDate = null;
@@ -1295,7 +1308,7 @@ function dailyTableSectionHTML(gid){
     </div>`;
   const extraPanel = groupExtraDaysPanelHTML(gid, p);
   if(!dates.length) return head + controls + extraPanel + `<p class="mini-note">حدّد تاريخ البداية والنهاية لهذا البرنامج من "البرامج والدورات" ليظهر جدول أيام الدوام.</p>`;
-  const studs = STUDENTS.filter(s=>s.groupId===gid).sort(byName);
+  const studs = STUDENTS.filter(s=>inGroupForProgram(s,p.id,gid)).sort(byName);
   let present=0, absent=0;
   const rows = studs.map(s=>{
     const rec = (((s.attendance||{})[p.id])||{})[dailyDate] || {};
@@ -1411,6 +1424,7 @@ function rosterPageHTML(){
       <div><h1>الكشف العام</h1><p>سجل دائم لكل الطلاب المنتسبين، حتى لو ما عاد منتسبين لأي مجموعة حاليًا</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn btn-ghost" onclick="openReportModal('roster',{gender:rosterGender})">🖨️ طباعة / تصدير الكشف</button>
+        <button class="btn btn-ghost" onclick="openAddStudentFromContacts()">📱 من جهات الاتصال</button>
         <button class="btn btn-primary" onclick="openModal('addStudent')">+ إضافة طالب</button>
       </div>
     </div>
@@ -1461,7 +1475,8 @@ function refreshRosterList(){
 }
 function unassignStudent(id,name){
   if(!confirm(`إزالة "${name}" من هذه المجموعة؟ بيضل موجود بالكشف العام ويقدر ينضم لمجموعة تانية لاحقًا.`)) return;
-  db.collection('students').doc(id).update({groupId:null}).then(()=>toast('تمت الإزالة من المجموعة'));
+  const st0 = RAW_STUDENTS.find(s=>s.id===id);
+  db.collection('students').doc(id).update(st0? freezePG(st0,{groupId:null}) : {groupId:null}).then(()=>toast('تمت الإزالة من المجموعة'));
 }
 function trueDeleteStudent(id,name){
   if(!confirm(`حذف "${name}" نهائيًا من الكشف العام؟ هذا الإجراء لا يمكن التراجع عنه.`)) return;
@@ -1497,15 +1512,52 @@ function programMemorizedNames(s, pid){
   SURAHS.forEach(x=>{ const r=(s.surahs||{})[x.num]; if(r && r.status==='memorized' && r.programId===pid) out.push(x.name); });
   return out;
 }
+let progAddQ = '';
+function progAddResultsHTML(pid){
+  const q = progAddQ.trim();
+  if(!q) return '<p class="mini-note">اكتب اسم الطالب للبحث بكل الكشف العام، وحدد بأي مجموعة كان بهذه الدورة (حتى لو حاليًا بمجموعة تانية أو غير منتسب).</p>';
+  const res = STUDENTS.filter(s=>!studentInProgram(s,pid) && (s.fullName||s.name||'').includes(q)).sort(byName).slice(0,15);
+  if(!res.length) return '<p class="mini-note">لا نتائج (أو الطالب موجود أصلًا بهذه الدورة).</p>';
+  const gOpts = (sel)=>`<option value="">بدون مجموعة</option>` + GROUPS.map(g=>`<option value="${g.id}" ${g.id===sel?'selected':''}>${esc(g.name)}</option>`).join('');
+  return res.map(s=>{
+    const cur = GROUPS.find(g=>g.id===s.groupId);
+    return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:7px 0;border-bottom:1px solid var(--line);">
+      <span style="min-width:190px;"><b>${esc(s.fullName||s.name)}</b> <span class="mini-note">${cur? 'حاليًا: '+esc(cur.name) : 'غير منتسب حاليًا'}</span></span>
+      <span class="mini-note">كان بمجموعة:</span>
+      <select id="pag_${s.id}" class="mini-input" style="min-width:140px;">${gOpts(s.groupId)}</select>
+      <button class="btn btn-primary btn-sm" onclick="submitAddToProgram('${s.id}','${pid}')">+ إضافة للدورة</button>
+    </div>`;
+  }).join('');
+}
+function refreshProgAdd(pid){ const w = document.getElementById('progAddWrap'); if(w) w.innerHTML = progAddResultsHTML(pid); }
+function submitAddToProgram(sid, pid){
+  const st = RAW_STUDENTS.find(s=>s.id===sid); if(!st) return;
+  const sel = document.getElementById('pag_'+sid); const gid = sel ? (sel.value || null) : (st.groupId||null);
+  const ids = new Set(studentProgramIds(st)); ids.add(pid);
+  const pg = {...(st.programGroups||{})}; pg[pid] = gid;
+  db.collection('students').doc(sid).update({programIds: Array.from(ids), programGroups: pg}).then(()=>toast('تمت إضافة الطالب للدورة'));
+}
+function submitRemoveFromProgram(sid, pid){
+  const st = RAW_STUDENTS.find(s=>s.id===sid); if(!st) return;
+  if(!confirm('إزالة الطالب من هذه الدورة؟ (بيانات حضوره وتسميعه بتضل محفوظة بسجله)')) return;
+  const ids = studentProgramIds(st).filter(x=>x!==pid);
+  db.collection('students').doc(sid).update({programIds: ids}).then(()=>toast('تمت الإزالة من الدورة'));
+}
 function programDetailHTML(id){
   const p = PROGRAMS.find(x=>x.id===id);
   if(!p){ currentProgramId=null; return programsPageHTML(); }
   const studs = STUDENTS.filter(s=>studentInProgram(s,id)).sort(byName);
+  const gOpts = (sel)=>`<option value="">بدون مجموعة</option>` + GROUPS.map(g=>`<option value="${g.id}" ${g.id===sel?'selected':''}>${esc(g.name)}</option>`).join('');
   const rows = studs.map(s=>{
-    const g = GROUPS.find(gr=>gr.id===s.groupId);
+    const cur = GROUPS.find(gr=>gr.id===s.groupId);
     const mem = programMemorizedNames(s,id);
-    return `<tr><td><b>${esc(s.fullName||s.name)}</b></td><td>${g?esc(g.name):'—'}</td><td style="direction:ltr;text-align:right;">${ctx(s.phone)}</td><td>${mem.length? esc(mem.join('، ')) : '<span class="mini-note">—</span>'}</td></tr>`;
-  }).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--ink-400);padding:20px;">لا يوجد طلاب مسجّلين بهذا البرنامج بعد</td></tr>`;
+    return `<tr><td><b>${esc(s.fullName||s.name)}</b></td>
+      <td><select class="mini-input" style="min-width:140px;" onchange="saveProgramGroup('${s.id}','${id}',this.value)">${gOpts(studentGroupInProgram(s,id))}</select></td>
+      <td>${cur? esc(cur.name) : '<span class="mini-note">غير منتسب</span>'}</td>
+      <td style="direction:ltr;text-align:right;">${ctx(s.phone)}</td>
+      <td>${mem.length? esc(mem.join('، ')) : '<span class="mini-note">—</span>'}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="submitRemoveFromProgram('${s.id}','${id}')">إزالة من الدورة</button></td></tr>`;
+  }).join('') || `<tr><td colspan="6" style="text-align:center;color:var(--ink-400);padding:20px;">لا يوجد طلاب مسجّلين بهذا البرنامج بعد</td></tr>`;
   return `
     <div class="breadcrumb"><span onclick="currentProgramId=null;render();">البرامج والدورات</span> ← ${esc(programLabel(p))}</div>
     <div class="pagehead">
@@ -1516,10 +1568,15 @@ function programDetailHTML(id){
         <button class="btn btn-danger" onclick="deleteProgram('${id}')">حذف البرنامج</button>
       </div>
     </div>
-    <p class="mini-note" style="margin-bottom:12px;">كشف التسميع النهائي صار خاص بكل مجموعة على حدة — افتحه من داخل صفحة كل مجموعة.</p>
+    <p class="mini-note" style="margin-bottom:12px;">كل طالب بيحتفظ بالمجموعة اللي كان فيها بهذه الدورة (مستقلة عن مجموعته الحالية). كشف التسميع النهائي لكل مجموعة بيعتمد عليها — افتحه من داخل صفحة المجموعة.</p>
+    <div class="card" data-write="1" style="padding:12px 16px;margin-bottom:14px;">
+      <div style="font-weight:700;margin-bottom:6px;">➕ إضافة طلاب لهذه الدورة من الكشف العام (وتحديد مجموعتهم بها)</div>
+      <input data-fk="progAddQ" type="search" placeholder="ابحث باسم الطالب..." value="${esc(progAddQ)}" oninput="progAddQ=this.value;refreshProgAdd('${id}');" style="max-width:320px;margin-bottom:8px;">
+      <div id="progAddWrap">${progAddResultsHTML(id)}</div>
+    </div>
     ${extraDaysSectionHTML(p)}
     <div class="card" style="padding:16px 18px;overflow-x:auto;">
-      <table><thead><tr><th>الطالب</th><th>المجموعة</th><th>الهاتف</th><th>ما حفظه في هذه الدورة</th></tr></thead><tbody>${rows}</tbody></table>
+      <table><thead><tr><th>الطالب</th><th>المجموعة بهذه الدورة</th><th>المجموعة الحالية</th><th>الهاتف</th><th>ما حفظه في هذه الدورة</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     </div>
   `;
 }
@@ -1549,7 +1606,7 @@ function addExtraDayForGroup(gid, pid){
 }
 function removeExtraDayForGroup(gid, pid, date){
   const g = RAW_GROUPS.find(x=>x.id===gid); if(!g) return;
-  const used = RAW_STUDENTS.some(s=>s.groupId===gid && (()=>{ const r = (((s.attendance||{})[pid])||{})[date]; return r && (r.status || r.surah || r.notes || r.signature); })());
+  const used = RAW_STUDENTS.some(s=>inGroupForProgram(s,pid,gid) && (()=>{ const r = (((s.attendance||{})[pid])||{})[date]; return r && (r.status || r.surah || r.notes || r.signature); })());
   if(!confirm(used ? 'هذا اليوم فيه بيانات حضور/تسميع مسجّلة لطلاب المجموعة. حذفه بيخفيه من الجداول بس ما بيحذف البيانات من سجلات الطلاب. متابعة؟' : 'حذف هذا اليوم الإضافي؟')) return;
   const extraDays = {...(g.extraDays||{})};
   extraDays[pid] = (extraDays[pid]||[]).filter(x=>x.date!==date);
@@ -1697,10 +1754,8 @@ function studentEditorHTML(id){
         ${GROUPS.map(gr=>`<option value="${gr.id}" ${st.groupId===gr.id?'selected':''}>${esc(gr.name)}</option>`).join('')}
       </select>
     </div>
-    <div class="field" style="margin-bottom:18px;"><label>البرامج / الدورات (يمكن اختيار أكثر من واحدة)</label>
-      <div style="max-height:130px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:10px 12px;">
-        ${PROGRAMS.map(pr=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:7px;font-size:14px;"><input type="checkbox" value="${pr.id}" ${myProgIds.includes(pr.id)?'checked':''} onchange="toggleStudentProgram('${id}','${pr.id}',this.checked)" style="width:auto;"> ${esc(programLabel(pr))}</label>`).join('') || '<span class="mini-note">لا توجد برامج مضافة بعد</span>'}
-      </div>
+    <div class="field" style="margin-bottom:18px;"><label>البرامج / الدورات — وبأي مجموعة كان الطالب بكل دورة</label>
+      <div id="studentProgramsWrap" style="max-height:190px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:10px 12px;">${studentProgramsHTML(id)}</div>
     </div>
 
     <h3 style="font-size:15px;color:var(--emerald-800);margin:20px 0 10px;">📝 ملاحظات للطالب (بتوصله كإشعار فوري)</h3>
@@ -1797,17 +1852,47 @@ function updateSurah(studentId, num, field, value){
   });
 }
 function toggleStudentProgram(id, programId, checked){
-  const st = STUDENTS.find(s=>s.id===id);
+  const st = RAW_STUDENTS.find(s=>s.id===id);
   if(!st) return;
   const ids = new Set(studentProgramIds(st));
-  if(checked) ids.add(programId); else ids.delete(programId);
-  db.collection('students').doc(id).update({programIds: Array.from(ids)}).then(()=>{
+  const pg = {...(st.programGroups||{})};
+  if(checked){ ids.add(programId); if(!hasPG(st, programId)) pg[programId] = st.groupId || null; }
+  else { ids.delete(programId); }   /* بنحتفظ بمجموعته بالدورة (تاريخ) حتى لو شلناه منها */
+  db.collection('students').doc(id).update({programIds: Array.from(ids), programGroups: pg}).then(()=>{
     toast('تم الحفظ');
     if(editingStudentId===id){
       const wrap = document.getElementById('attendanceSection');
       if(wrap) wrap.innerHTML = attendanceSectionHTML(id);
+      refreshStudentPrograms(id);
     }
   });
+}
+function saveProgramGroup(sid, pid, gid){
+  const st = RAW_STUDENTS.find(s=>s.id===sid); if(!st) return;
+  const pg = {...(st.programGroups||{})}; pg[pid] = gid || null;
+  db.collection('students').doc(sid).update({programGroups: pg}).then(()=>{
+    toast('تم حفظ مجموعته بهذه الدورة');
+    if(editingStudentId===sid){
+      refreshStudentPrograms(sid);
+      const w = document.getElementById('attendanceSection'); if(w) w.innerHTML = attendanceSectionHTML(sid);
+    }
+  });
+}
+function studentProgramsHTML(id){
+  const st = RAW_STUDENTS.find(s=>s.id===id); if(!st) return '';
+  const mine = studentProgramIds(st);
+  const gOpts = (sel)=>`<option value="">بدون مجموعة</option>` + GROUPS.map(g=>`<option value="${g.id}" ${g.id===sel?'selected':''}>${esc(g.name)}</option>`).join('');
+  return PROGRAMS.slice().sort((a,b)=>(b.startDate||'').localeCompare(a.startDate||'')).map(pr=>{
+    const on = mine.includes(pr.id);
+    return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:7px;font-size:14px;">
+      <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin:0;min-width:200px;"><input type="checkbox" value="${pr.id}" ${on?'checked':''} onchange="toggleStudentProgram('${id}','${pr.id}',this.checked)" style="width:auto;"> ${esc(programLabel(pr))}</label>
+      ${on? `<span class="mini-note">كان بمجموعة:</span><select class="mini-input" style="min-width:130px;" onchange="saveProgramGroup('${id}','${pr.id}',this.value)">${gOpts(studentGroupInProgram(st, pr.id))}</select>` : ''}
+    </div>`;
+  }).join('') || '<span class="mini-note">لا توجد برامج مضافة بعد</span>';
+}
+function refreshStudentPrograms(id){
+  const w = document.getElementById('studentProgramsWrap');
+  if(w){ w.innerHTML = studentProgramsHTML(id); relockStudent(w); }
 }
 
 /* ---------------------------------------------------------
@@ -1906,7 +1991,7 @@ function saveSession(studentId, programId, date, patch){
     }
   }
   const ids = studentProgramIds(st);
-  if(!ids.includes(programId)) update.programIds = [...ids, programId];
+  if(!ids.includes(programId)){ update.programIds = [...ids, programId]; if(!hasPG(st, programId)) update.programGroups = {...(st.programGroups||{}), [programId]: st.groupId || null}; }
   return db.collection('students').doc(studentId).update(update).then(r=>{ if(progItems && progItems.length) notifyProgress(studentId, progItems); return r; });
 }
 function afterSessionSave(stId){
@@ -1997,14 +2082,14 @@ function attendanceTableInnerHTML(id, programId){
   const p = PROGRAMS.find(x=>x.id===programId);
   if(!p) return '';
   const stForDates = STUDENTS.find(s=>s.id===id);
-  const dates = programSessionDates(p, stForDates && stForDates.groupId);
+  const dates = programSessionDates(p, stForDates && studentGroupInProgram(stForDates, programId));
   if(!dates.length) return `<p class="mini-note">حدّد تاريخ البداية والنهاية لهذا البرنامج من تبويب "البرامج والدورات" ليظهر جدول الأيام هون.</p>`;
   const st = STUDENTS.find(s=>s.id===id);
   const att = (st.attendance && st.attendance[programId]) || {};
   const rows = dates.map(d=>{
     const rec = att[d] || {};
     return `<tr>
-      <td style="white-space:nowrap;">${d}<div class="mini-note">${dayNameOf(d)}${isExtraDay(p,d,stForDates&&stForDates.groupId)?' · يوم إضافي':''}</div></td>
+      <td style="white-space:nowrap;">${d}<div class="mini-note">${dayNameOf(d)}${isExtraDay(p,d,stForDates&&studentGroupInProgram(stForDates, programId))?' · يوم إضافي':''}</div></td>
       ${sessionCellsHTML(id, programId, d, rec, 'a:'+d, false)}
       <td><input class="mini-input" style="min-width:110px;" value="${esc(rec.signature||'')}" placeholder="توقيع المعلم" onchange="saveSessionField('${id}','${programId}','${d}','signature',this.value)"></td>
       <td><input class="mini-input" style="min-width:120px;" value="${esc(rec.notes||'')}" placeholder="ملاحظات" onchange="saveSessionField('${id}','${programId}','${d}','notes',this.value)"></td>
@@ -2031,7 +2116,9 @@ function refreshAttendanceTable(id){
   if(inner2){ inner2.scrollTop = scrollTop; inner2.scrollLeft = scrollLeft; }
 }
 function updateStudentField(id,field,value){
-  db.collection('students').doc(id).update({[field]:value});
+  const upd = {[field]:value};
+  if(field==='groupId'){ const st = RAW_STUDENTS.find(s=>s.id===id); if(st && (st.groupId||null)!==(value||null)) freezePG(st, upd); }
+  db.collection('students').doc(id).update(upd);
   toast('تم الحفظ');
 }
 function deleteAdmin(id,name){
@@ -2163,6 +2250,15 @@ function openModal(kind, arg){
     body.innerHTML = `
       <button class="close-x" onclick="closeModal()">✕</button>
       <h2>إضافة طالب جديد</h2>
+      <div class="card" style="padding:10px 12px;margin-bottom:12px;background:var(--sand-50);">
+        <div style="font-weight:700;font-size:13.5px;margin-bottom:6px;">📱 إضافة من جهات الاتصال بالهاتف</div>
+        <div class="toolbar" style="margin-bottom:4px;">
+          <button class="btn btn-ghost btn-sm" onclick="pickContact()">اختيار من جهات الاتصال</button>
+          <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0;">📇 استيراد ملف جهات اتصال (vCard)<input type="file" accept=".vcf,text/vcard,text/x-vcard" style="display:none;" onchange="importVcf(this)"></label>
+        </div>
+        <div class="mini-note">"اختيار من جهات الاتصال" يعمل على متصفح كروم بالأندرويد. على الآيفون أو الحاسوب: شارك/صدّر جهة الاتصال كملف vCard (.vcf) وارفعه من الزر الثاني. بيتعبّى الاسم والهاتف وبتكمّل الباقي.</div>
+        <div id="contactChooser"></div>
+      </div>
       <div class="field"><label>الاسم الرباعي</label><input id="nsFullName" placeholder="مثال: محمد أحمد علي الأسدي"></div>
       <div class="row2">
         <div class="field"><label>الجنس</label><select id="nsGender"><option value="m">ذكر</option><option value="f">أنثى</option></select></div>
@@ -2265,7 +2361,7 @@ function submitStudent(){
   db.collection('students').add({
     name: fullName, fullName, gender, dob, phone, joinDate, address,
     grade: gradeV? Number(gradeV): null, age: ageV? Number(ageV): null, school,
-    programIds, password:pass, groupId, surahs:{}, attendance:{}, inTajweed: !!(document.getElementById('nsTajweed')||{}).checked
+    programIds, programGroups: Object.fromEntries(programIds.map(pid=>[pid, groupId])), password:pass, groupId, surahs:{}, attendance:{}, inTajweed: !!(document.getElementById('nsTajweed')||{}).checked
   }).then(()=>{closeModal();toast('تمت إضافة الطالب');});
 }
 function submitEditGroup(){
@@ -2384,7 +2480,7 @@ function renderStudentView(){
     const myPrograms = PROGRAMS.filter(pr=>myProgIds.includes(pr.id));
     const dayNames = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
     attendanceViewHTML = myPrograms.map(pr=>{
-      const dates = programSessionDates(pr, st.groupId);
+      const dates = programSessionDates(pr, studentGroupInProgram(st, pr.id));
       const att = (st.attendance && st.attendance[pr.id]) || {};
       const rows = dates.map(d=>{
         const rec = att[d] || {status:'', signature:'', notes:''};
@@ -2478,7 +2574,7 @@ function getFinalSheet(pid, gid){
   /* توافق مع بيانات قديمة كانت مخزّنة قبل هذا التحديث تحت معرّف الدورة وحدها (بدون حذفها) — تُعرض هون فقط لطلاب هذه المجموعة تحديدًا */
   const legacy = FINALS.find(f=>f.id===pid);
   if(legacy){
-    const gset = new Set(STUDENTS.filter(s=>s.groupId===gid).map(s=>s.id));
+    const gset = new Set(STUDENTS.filter(s=>studentInProgram(s,pid) && studentGroupInProgram(s,pid)===gid).map(s=>s.id));
     const rows = {};
     Object.keys(legacy.rows||{}).forEach(sid=>{ if(gset.has(sid)) rows[sid] = legacy.rows[sid]; });
     return { id:compId, pid, gid, committee: normCommittee(legacy.committee), settings:{...defaultFinalSettings(), ...(legacy.settings||{})}, rows, finalized:false, finalizedAt:null, legacySource:pid };
@@ -2526,7 +2622,7 @@ function finalSheetData(pid, gid){
   const p = PROGRAMS.find(x=>x.id===pid);
   const g = GROUPS.find(x=>x.id===gid);
   const sh = getFinalSheet(pid, gid);
-  const studs = STUDENTS.filter(s=>s.groupId===gid && studentInProgram(s,pid)).sort(byName);
+  const studs = STUDENTS.filter(s=>studentInProgram(s,pid) && studentGroupInProgram(s,pid)===gid).sort(byName);
   const rows = studs.map(s=>{
     const row = sh.rows[s.id] || {};
     const calc = computeFinalRow(row, sh.settings, countAbsences(s,pid));
@@ -2948,7 +3044,7 @@ function buildReportInner(type, p){
     let att='';
     studentProgramIds(s).forEach(pid=>{
       const pg=PROGRAMS.find(x=>x.id===pid); if(!pg) return;
-      const rows = programSessionDates(pg, s.groupId).map(d=>{ const r=(((s.attendance||{})[pid])||{})[d]||{}; const en=dayEntriesFilled(r); const J=f=>en.map(f).join('<br>'); return [d,dayNameOf(d),statusTxt(r.status),J(e=>esc(surahName(e.surah))),J(e=>e.from||''),J(e=>e.to||''),J(e=>esc(e.grade||'')),J(e=>e.finished?'✓':''),esc(r.signature||''),esc(r.notes||'')]; });
+      const rows = programSessionDates(pg, studentGroupInProgram(s, pid)).map(d=>{ const r=(((s.attendance||{})[pid])||{})[d]||{}; const en=dayEntriesFilled(r); const J=f=>en.map(f).join('<br>'); return [d,dayNameOf(d),statusTxt(r.status),J(e=>esc(surahName(e.surah))),J(e=>e.from||''),J(e=>e.to||''),J(e=>esc(e.grade||'')),J(e=>e.finished?'✓':''),esc(r.signature||''),esc(r.notes||'')]; });
       att += `<h3>الحضور والتسميع — ${esc(programLabel(pg))}</h3>` + rpTable(['التاريخ','اليوم','الحضور','السورة','من','إلى','التقدير','ختمها','التوقيع','ملاحظات'],rows,'حضور '+programLabel(pg),'compact');
     });
     return R('سجل الطالب — '+(s.fullName||s.name), `${info}<h3>سجل الحفظ</h3>${rpTable(['#','السورة','الحالة','التقدير','تاريخ الحفظ','الدورة'],mrows,'الحفظ')}${att}`, 'سجل-'+(s.fullName||s.name));
@@ -2966,7 +3062,7 @@ function buildReportInner(type, p){
   if(type==='attendanceSheet'){
     const pr = PROGRAMS.find(x=>x.id===p.pid); if(!pr) return R('كشف الحضور','<p>لا يوجد</p>');
     const dates = p.gid ? programSessionDates(pr, p.gid) : programDatesUnion(pr);
-    const studs = (p.gid? STUDENTS.filter(s=>s.groupId===p.gid) : STUDENTS.filter(s=>studentInProgram(s,pr.id))).sort(byName);
+    const studs = (p.gid? STUDENTS.filter(s=>inGroupForProgram(s,pr.id,p.gid)) : STUDENTS.filter(s=>studentInProgram(s,pr.id))).sort(byName);
     const head = ['#','الطالب',...dates.map(d=>`${d.slice(5)}<br>${dayNameOf(d)}`),'حضور','غياب'];
     const rows = studs.map((s,i)=>{ let a=0,b=0; const cells=dates.map(d=>{ const r=(((s.attendance||{})[pr.id])||{})[d]||{}; if(r.status==='present'){a++;return 'ح';} if(r.status==='absent'){b++;return 'غ';} return ''; }); return [i+1,sn(s),...cells,a,b]; });
     return R('كشف الحضور والغياب — '+programLabel(pr)+(p.gid?' — '+groupNameById(p.gid):''), rpTable(head,rows,'الحضور','compact'), 'حضور-'+programLabel(pr), 'landscape');
@@ -2974,7 +3070,7 @@ function buildReportInner(type, p){
   if(type==='dailySheet'){
     const pr = PROGRAMS.find(x=>x.id===p.pid); const g = GROUPS.find(x=>x.id===p.gid);
     if(!pr||!g) return R('جدول الدوام','<p>لا يوجد</p>');
-    const studs = STUDENTS.filter(s=>s.groupId===g.id).sort(byName);
+    const studs = STUDENTS.filter(s=>inGroupForProgram(s,pr.id,g.id)).sort(byName);
     const rows = studs.map((s,i)=>{ const r=(((s.attendance||{})[pr.id])||{})[p.date]||{}; const en=dayEntriesFilled(r); const J=f=>en.map(f).join('<br>'); return [i+1,sn(s),statusTxt(r.status),J(e=>esc(surahName(e.surah))),J(e=>e.from||''),J(e=>e.to||''),J(e=>esc(e.grade||'')),J(e=>e.finished?'✓ ختمها':''),esc(r.notes||'')]; });
     return R(`جدول الدوام — ${g.name} — ${p.date} (${dayNameOf(p.date)})`, `${rpKV([['النادي',esc(programLabel(pr))],['المعلم/ة',esc(g.teacherName||'—')]],'معلومات')}${rpTable(['#','الطالب','الحضور','السورة','من آية','إلى آية','التقدير','ختمها','ملاحظات'],rows,'جدول اليوم')}`, `دوام-${g.name}-${p.date}`, 'landscape');
   }
@@ -2986,14 +3082,14 @@ function buildReportInner(type, p){
   if(type==='courseClose'){
     const pr = PROGRAMS.find(x=>x.id===p.pid), g = GROUPS.find(x=>x.id===p.gid); if(!pr||!g) return R('ختام الدورة','<p>لا يوجد</p>');
     const f = finalTableForReport(pr.id, g.id);
-    const studs = STUDENTS.filter(s=>s.groupId===g.id && studentInProgram(s,pr.id)).sort(byName);
+    const studs = STUDENTS.filter(s=>studentInProgram(s,pr.id) && studentGroupInProgram(s,pr.id)===g.id).sort(byName);
     const mem = rpTable(['#','الطالب','ما حفظه في الدورة','أيام الغياب'],studs.map((s,i)=>[i+1,sn(s),esc(programMemorizedNames(s,pr.id).join('، ')),countAbsences(s,pr.id)]),'محفوظات الدورة');
     return R('ختام الدورة — '+g.name+' — '+programLabel(pr), `${rpKV([['الدورة',esc(programLabel(pr))],['المجموعة',esc(g.name)],['المدة',`${esc(pr.startDate||'')} → ${esc(pr.endDate||'')}`],['عدد الطلاب',studs.length]],'الدورة')}<h3>كشف التسميع النهائي</h3>${f.html}<h3>ما تم حفظه في الدورة</h3>${mem}`, 'ختام-'+g.name+'-'+programLabel(pr), 'landscape');
   }
   if(type==='programSummary'){
     const pr = PROGRAMS.find(x=>x.id===p.pid); if(!pr) return R('ملخص دورة','<p>لا يوجد</p>');
     const studs = STUDENTS.filter(s=>studentInProgram(s,pr.id)).sort(byName);
-    return R('ملخص — '+programLabel(pr), `${rpKV([['المدة',`${esc(pr.startDate||'')} → ${esc(pr.endDate||'')}`],['أيام الدوام',isWinterSummer(pr)?'السبت والاثنين والأربعاء':'السبت'],['عدد الطلاب',studs.length]],'الدورة')}${rpTable(['#','الطالب','المجموعة','ما حفظه في الدورة','غياب'],studs.map((s,i)=>[i+1,sn(s),esc(groupNameById(s.groupId)),esc(programMemorizedNames(s,pr.id).join('، ')),countAbsences(s,pr.id)]),'الطلاب')}`, 'ملخص-'+programLabel(pr));
+    return R('ملخص — '+programLabel(pr), `${rpKV([['المدة',`${esc(pr.startDate||'')} → ${esc(pr.endDate||'')}`],['أيام الدوام',isWinterSummer(pr)?'السبت والاثنين والأربعاء':'السبت'],['عدد الطلاب',studs.length]],'الدورة')}${rpTable(['#','الطالب','المجموعة','ما حفظه في الدورة','غياب'],studs.map((s,i)=>[i+1,sn(s),esc(groupNameById(studentGroupInProgram(s,pr.id))),esc(programMemorizedNames(s,pr.id).join('، ')),countAbsences(s,pr.id)]),'الطلاب')}`, 'ملخص-'+programLabel(pr));
   }
   if(type==='honorSheet'){
     const list = honorEntries(p.gender);
@@ -3710,6 +3806,68 @@ function surveyResultsReport(sv){
   const legend = qs.map((q,i)=>`س${i+1}: ${esc(q.text)}`).join(' | ');
   const wait = rpTable(['#','الطالب','المجموعة'], waiting.map((s,i)=>[i+1, sn(s), esc(groupNameById(s.groupId))]), 'لم يجيبوا');
   return {title:'نتائج استبيان — '+sv.title, html: `${info}<h3>ملخص الإجابات</h3>${per || '<p class="mini">لا أسئلة</p>'}<h3>تفاصيل الردود</h3><div class="mini">${legend}</div>${det}<h3>لم يجيبوا بعد (${waiting.length})</h3>${wait}`};
+}
+
+/* =========================================================
+   إضافة طالب من جهات الاتصال بالهاتف (Contact Picker على كروم أندرويد، أو ملف vCard)
+   ========================================================= */
+function normPhone(t){
+  let s = String(t||'').replace(/[\s\-().]/g,'');
+  if(s.startsWith('00962')) s = '0'+s.slice(5);
+  else if(s.startsWith('+962')) s = '0'+s.slice(4);
+  return s;
+}
+let contactTmp = [];
+function fillFromContact(ct){
+  const n = document.getElementById('nsFullName'), p = document.getElementById('nsPhone');
+  if(n && ct.name) n.value = ct.name.trim();
+  if(p && ct.tel) p.value = normPhone(ct.tel);
+  const ch = document.getElementById('contactChooser'); if(ch) ch.innerHTML = '';
+  toast('تم تعبئة الاسم والهاتف — كمّل باقي البيانات', 4000);
+}
+function handleContactList(list){
+  list = list.filter(x=>x && (x.name || x.tel));
+  if(!list.length) return toast('ما لقيت جهات اتصال صالحة');
+  if(list.length===1) return fillFromContact(list[0]);
+  contactTmp = list;
+  const ch = document.getElementById('contactChooser');
+  if(ch) ch.innerHTML = '<div class="mini-note" style="margin:6px 0;">اختر الجهة اللي بدك تضيفها:</div>' + list.slice(0,80).map((x,i)=>`<button class="btn btn-ghost btn-sm" style="margin:2px;" onclick="fillFromContact(contactTmp[${i}])">${esc(x.name||'(بدون اسم)')} ${esc(normPhone(x.tel))}</button>`).join('');
+}
+async function pickContact(quiet){
+  if(!(navigator.contacts && window.ContactsManager)){ if(!quiet) toast('اختيار جهات الاتصال مباشرة يعمل على كروم بالأندرويد فقط — استخدم استيراد ملف vCard', 6000); return; }
+  try{
+    const res = await navigator.contacts.select(['name','tel'], {multiple:true});
+    handleContactList(res.map(r=>({name:(r.name&&r.name[0])||'', tel:(r.tel&&r.tel[0])||''})));
+  }catch(e){ if(!e || e.name!=='AbortError') toast('تعذّر فتح جهات الاتصال'); }
+}
+function openAddStudentFromContacts(){ openModal('addStudent'); pickContact(true); }
+function qpDecode(s){
+  try{
+    const bytes = [];
+    s.replace(/=([0-9A-Fa-f]{2})|([^=])/g, (m,h,ch)=>{ if(h) bytes.push(parseInt(h,16)); else new TextEncoder().encode(ch).forEach(b=>bytes.push(b)); return ''; });
+    return new TextDecoder('utf-8').decode(new Uint8Array(bytes));
+  }catch(e){ return s; }
+}
+function parseVcf(text){
+  text = String(text||'').replace(/\r\n/g,'\n').replace(/\r/g,'\n').replace(/=\n/g,'').replace(/\n[ \t]/g,'');
+  return text.split(/BEGIN:VCARD/i).slice(1).map(card=>{
+    let name = '', tel = '';
+    card.split('\n').forEach(line=>{
+      const m = line.match(/^(?:[A-Za-z0-9]+\.)?([A-Za-z]+)((?:;[^:]*)?):(.*)$/); if(!m) return;
+      const key = m[1].toUpperCase(), params = m[2]||'', val = m[3];
+      const dec = /ENCODING=QUOTED-PRINTABLE/i.test(params) ? qpDecode(val) : val;
+      if(key==='FN' && !name) name = dec.trim();
+      else if(key==='N' && !name){ const p = dec.split(';'); name = [p[1],p[2],p[0]].filter(Boolean).join(' ').trim(); }
+      else if(key==='TEL' && !tel) tel = dec.trim();
+    });
+    return {name, tel};
+  });
+}
+function importVcf(input){
+  const f = input.files && input.files[0]; if(!f) return;
+  const rd = new FileReader();
+  rd.onload = ()=>{ handleContactList(parseVcf(String(rd.result||''))); input.value = ''; };
+  rd.readAsText(f);
 }
 
 /* boot */
