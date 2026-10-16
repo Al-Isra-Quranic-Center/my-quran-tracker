@@ -1057,7 +1057,7 @@ function renderAdmin(){
 function setTab(t){ activeTab=t; currentGroupId=null; currentProgramId=null; groupFinalView=false; groupFinalProgramId=null; render(); }
 function openGroup(id){ currentGroupId=id; groupSearch=''; dailyProgramId=null; dailyDate=null; groupFinalView=false; groupFinalProgramId=null; render(); }
 function backToGroups(){ currentGroupId=null; render(); }
-function openProgram(id){ currentProgramId=id; schedSelId=null; render(); }
+function openProgram(id){ currentProgramId=id; schedSelId=null; schedDay=null; render(); }
 function programLabel(p){
   if(p.yearFrom && p.yearTo) return `${p.type} ${p.yearFrom}-${p.yearTo}`;
   return `${p.type} ${p.year}`;
@@ -1315,7 +1315,7 @@ function dailyTableSectionHTML(gid){
   const rows = studs.map(s=>{
     const rec = (((s.attendance||{})[p.id])||{})[dailyDate] || {};
     if(rec.status==='present') present++; if(rec.status==='absent') absent++;
-    return `<tr><td style="white-space:nowrap;"><b>${esc(s.fullName||s.name)}</b></td>${sessionCellsHTML(s.id, p.id, dailyDate, rec, 'd:'+s.id, true)}</tr>${extraRowsHTML(s.id, p.id, dailyDate, rec, 'd:'+s.id, 1)}`;
+    return `<tr><td style="white-space:nowrap;"><b>${esc(s.fullName||s.name)}</b></td>${sessionCellsHTML(s.id, p.id, dailyDate, rec, 'd:'+s.id, true)}</tr>${extraRowsHTML(s.id, p.id, dailyDate, rec, 'd:'+s.id, 3)}`;
   }).join('') || `<tr><td colspan="8" style="text-align:center;color:var(--ink-400);padding:20px;">لا يوجد طلاب بهذه المجموعة</td></tr>`;
   return head + controls + extraPanel + `
     <div class="mini-note" style="margin-bottom:8px;">${esc(programLabel(p))} — ${dailyDate} (${dayNameOf(dailyDate)}) · حاضر: ${present} · غائب: ${absent}. أي تسميع بتسجله بينعكس تلقائيًا على سجل الطالب الرئيسي (محفوظة / قيد الحفظ + التقدير).</div>
@@ -2012,6 +2012,8 @@ function saveSessionField(stId, pid, date, field, value){
     const sn = Number(prev.surah)||0;
     if(sn && v>SURAHS[sn-1].ayahs) v = SURAHS[sn-1].ayahs;
     patch[field] = v||'';
+  } else if(field==='deductPrayer' || field==='deductBehavior'){
+    patch[field] = (value==='' || value==null) ? '' : Math.max(0, Math.round((Number(value)||0)*100)/100);
   } else {
     patch[field] = value;
   }
@@ -2070,6 +2072,8 @@ function sessionCellsHTML(stId, pid, date, rec, fk, withNotes){
       <option value="absent" ${rec.status==='absent'?'selected':''}>غائب</option>
     </select></td>
     ${entryCellsHTML(stId, pid, date, 0, entryOf(rec,0), fk)}
+    <td><input data-fk="${fk}:dp" type="number" step="0.25" min="0" class="mini-input" style="width:58px;" value="${rec.deductPrayer??''}" placeholder="0" title="علامات تنقص بسبب الصلاة" onchange="${call('deductPrayer','this.value')}"></td>
+    <td><input data-fk="${fk}:db" type="number" step="0.25" min="0" class="mini-input" style="width:58px;" value="${rec.deductBehavior??''}" placeholder="0" title="علامات تنقص بسبب السلوك" onchange="${call('deductBehavior','this.value')}"></td>
     ${withNotes? `<td><input data-fk="${fk}:notes" class="mini-input" style="min-width:120px;" value="${esc(rec.notes||'')}" placeholder="ملاحظات" onchange="${call('notes','this.value')}"></td>` : ''}`;
 }
 /* صفوف السور الإضافية تحت صف اليوم (trail = عدد الأعمدة بعد خلية "ختمها") */
@@ -2079,7 +2083,7 @@ function extraRowsHTML(stId, pid, date, rec, fk, trail){
     return `<tr class="sub-row"><td class="mini-note" style="text-align:left;">↳ سورة إضافية</td><td></td>${entryCellsHTML(stId, pid, date, idx, e, fk+':x'+idx)}${'<td></td>'.repeat(trail)}</tr>`;
   }).join('');
 }
-const SESSION_HEAD = '<th>الحضور</th><th>السورة</th><th>من آية</th><th>إلى آية</th><th>التقدير</th><th>ختمها</th>';
+const SESSION_HEAD = '<th>الحضور</th><th>السورة</th><th>من آية</th><th>إلى آية</th><th>التقدير</th><th>ختمها</th><th title="علامات تنقص من الصلاة والسلوك بكشف التسميع النهائي">خصم صلاة</th><th>خصم سلوك</th>';
 
 function attendanceTableInnerHTML(id, programId){
   const p = PROGRAMS.find(x=>x.id===programId);
@@ -2096,7 +2100,7 @@ function attendanceTableInnerHTML(id, programId){
       ${sessionCellsHTML(id, programId, d, rec, 'a:'+d, false)}
       <td><input class="mini-input" style="min-width:110px;" value="${esc(rec.signature||'')}" placeholder="توقيع المعلم" onchange="saveSessionField('${id}','${programId}','${d}','signature',this.value)"></td>
       <td><input class="mini-input" style="min-width:120px;" value="${esc(rec.notes||'')}" placeholder="ملاحظات" onchange="saveSessionField('${id}','${programId}','${d}','notes',this.value)"></td>
-    </tr>${extraRowsHTML(id, programId, d, rec, 'a:'+d, 2)}`;
+    </tr>${extraRowsHTML(id, programId, d, rec, 'a:'+d, 4)}`;
   }).join('');
   return `
     <div class="att-scroll" style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:8px;">
@@ -2494,12 +2498,12 @@ function renderStudentView(){
             ? '<span class="status-pill" style="background:#fbe4e2;color:var(--red-600);">غائب</span>'
             : '<span class="status-pill status-not">—</span>';
         const recit = dayEntriesFilled(rec).map(fmtEntry).join(' | ') || '—';
-        return `<tr><td>${d}<div class="mini-note">${dayName}</div></td><td>${pill}</td><td>${esc(recit)}</td><td>${esc(rec.signature||'—')}</td><td>${esc(rec.notes||'—')}</td></tr>`;
-      }).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--ink-400);padding:14px;">لسا ما تحدد تاريخ لهذه الدورة</td></tr>`;
+        return `<tr><td>${d}<div class="mini-note">${dayName}</div></td><td>${pill}</td><td>${esc(recit)}</td><td>${dedViewTxt(rec)}</td><td>${esc(rec.signature||'—')}</td><td>${esc(rec.notes||'—')}</td></tr>`;
+      }).join('') || `<tr><td colspan="6" style="text-align:center;color:var(--ink-400);padding:14px;">لسا ما تحدد تاريخ لهذه الدورة</td></tr>`;
       return `
         <h3 style="font-size:14.5px;color:var(--emerald-800);margin:14px 0 8px;">${esc(programLabel(pr))}</h3>
         <div class="card" style="padding:12px 14px;overflow-x:auto;margin-bottom:12px;">
-          <table><thead><tr><th>التاريخ</th><th>الحضور</th><th>التسميع</th><th>توقيع المعلم</th><th>ملاحظات</th></tr></thead><tbody>${rows}</tbody></table>
+          <table><thead><tr><th>التاريخ</th><th>الحضور</th><th>التسميع</th><th>خصم صلاة/سلوك</th><th>توقيع المعلم</th><th>ملاحظات</th></tr></thead><tbody>${rows}</tbody></table>
         </div>`;
     }).join('');
   }
@@ -2584,12 +2588,18 @@ function getFinalSheet(pid, gid){
   }
   return { id:compId, pid, gid, committee:['','',''], settings: defaultFinalSettings(), rows:{}, finalized:false, finalizedAt:null };
 }
+function sumDeductions(st, pid){
+  const att = (st.attendance||{})[pid] || {};
+  let p = 0, b = 0;
+  Object.keys(att).forEach(d=>{ const r = att[d]||{}; p += Number(r.deductPrayer)||0; b += Number(r.deductBehavior)||0; });
+  return {p, b, total: p+b};
+}
 function countAbsences(st, pid){
   const att = (st.attendance||{})[pid] || {};
   return Object.keys(att).filter(d=>att[d] && att[d].status==='absent').length;
 }
 /* العلامة: (20 − خصم الفتح والجلي) + (10 − خصم الخفي والتنبيه) + (الحضور) + الصلاة والسلوك + الصفحات×2 */
-function computeFinalRow(row, s, autoAbs){
+function computeFinalRow(row, s, autoAbs, autoDeduct){
   row = row || {};
   const sec = row.sec || [];
   let f=0,j=0,x=0,t=0;
@@ -2599,11 +2609,14 @@ function computeFinalRow(row, s, autoAbs){
   const hasOverride = row.absOverride!==null && row.absOverride!==undefined && row.absOverride!=='';
   const abs = hasOverride ? (Number(row.absOverride)||0) : autoAbs;
   const att = Math.max(0, s.maxAtt - abs*s.absCost);
-  const prayer = Math.min(s.maxPrayer, Math.max(0, Number(row.prayer)||0));
+  const hasPrayerOv = row.prayer!==null && row.prayer!==undefined && row.prayer!=='';
+  const ded = Number(autoDeduct)||0;
+  /* الصلاة والسلوك: تلقائيًا (الحد الأعلى − خصومات الكشف اليومي)، إلا إذا انكتبت قيمة يدوية */
+  const prayer = hasPrayerOv ? Math.min(s.maxPrayer, Math.max(0, Number(row.prayer)||0)) : Math.max(0, s.maxPrayer - ded);
   const pagesMarks = (Number(row.pages)||0) * s.pageMult;
   const total = fj + kt + att + prayer + pagesMarks;
   const r2 = v=>Math.round(v*100)/100;
-  return {fj:r2(fj), kt:r2(kt), att:r2(att), prayer:r2(prayer), pagesMarks:r2(pagesMarks), total:r2(total), abs};
+  return {fj:r2(fj), kt:r2(kt), att:r2(att), prayer:r2(prayer), pagesMarks:r2(pagesMarks), total:r2(total), abs, ded:r2(ded), prayerOverride:hasPrayerOv};
 }
 /* ترتيب تلقائي: أعلى علامة الأول ثم الثاني والثالث؛ الباقي «تميّز» إذا قريب من الأعلى وإلا «ترضية» */
 function rankFinal(items, s){
@@ -2628,7 +2641,7 @@ function finalSheetData(pid, gid){
   const studs = STUDENTS.filter(s=>studentInProgram(s,pid) && studentGroupInProgram(s,pid)===gid).sort(byName);
   const rows = studs.map(s=>{
     const row = sh.rows[s.id] || {};
-    const calc = computeFinalRow(row, sh.settings, countAbsences(s,pid));
+    const calc = computeFinalRow(row, sh.settings, countAbsences(s,pid), sumDeductions(s,pid).total);
     return {s, row, calc, done: row.done===true};
   });
   const ranks = rankFinal(rows.filter(r=>r.done).map(r=>({id:r.s.id,total:r.calc.total})), sh.settings);
@@ -2656,7 +2669,7 @@ function finalSheetHTML(pid, gid){
       ${secCells}
       <td>${r.calc.fj}</td><td>${r.calc.kt}</td>
       <td title="غيابات: ${r.calc.abs}">${r.calc.att}<div class="mini-note">غ:${inp(sid,'absOverride',(row.absOverride===undefined||row.absOverride===null||row.absOverride==='')?r.calc.abs:row.absOverride,40)}</div></td>
-      <td>${inp(sid,'prayer',row.prayer,52)}</td>
+      <td title="خصومات الصلاة والسلوك من الكشف اليومي: ${r.calc.ded}">${r.calc.prayer}<div class="mini-note">خصم: ${r.calc.ded}</div><div class="mini-note"><input data-fk="f:${sid}:prayer" type="number" step="any" class="mini-input" style="width:52px;" value="${row.prayer===undefined||row.prayer===null?'':row.prayer}" placeholder="تلقائي" title="اتركها فارغة لتُحسب تلقائيًا" onchange="saveFinalRow('${pid}','${gid}','${sid}','prayer',this.value)"></div></td>
       <td>${r.calc.pagesMarks}</td>
       <td>${totalTxt}</td>
       <td>${rankTxt}</td>
@@ -2675,7 +2688,7 @@ function finalSheetHTML(pid, gid){
         <button class="btn btn-primary" onclick="finalizeGroupProgram('${pid}','${gid}')">✅ إنهاء وحفظ نسخة PDF</button>
       </div>
     </div>
-    <div class="warn-box" style="margin-bottom:12px;">ف = فتح (خصم ${sh.settings.wFath}) · ج = لحن جلي (خصم ${sh.settings.wJali}) · خ = لحن خفي (خصم ${sh.settings.wKhafi}) · ت = تنبيه (خصم ${sh.settings.wTanbih}). فتح+جلي من ${sh.settings.maxFJ}، خفي+تنبيه من ${sh.settings.maxKT}، الحضور من ${sh.settings.maxAtt} (خصم ${sh.settings.absCost} لكل غياب، يُحسب من كشف الحضور تلقائيًا ويمكن تعديله)، الصلاة والسلوك من ${sh.settings.maxPrayer}، وعدد الصفحات × ${sh.settings.pageMult}. علّم «✓» عند الطالب الذي تم تسميعه ليدخل بالترتيب.</div>
+    <div class="warn-box" style="margin-bottom:12px;">ف = فتح (خصم ${sh.settings.wFath}) · ج = لحن جلي (خصم ${sh.settings.wJali}) · خ = لحن خفي (خصم ${sh.settings.wKhafi}) · ت = تنبيه (خصم ${sh.settings.wTanbih}). فتح+جلي من ${sh.settings.maxFJ}، خفي+تنبيه من ${sh.settings.maxKT}، الحضور من ${sh.settings.maxAtt} (خصم ${sh.settings.absCost} لكل غياب، يُحسب من كشف الحضور تلقائيًا ويمكن تعديله)، الصلاة والسلوك من ${sh.settings.maxPrayer} (بتنقص تلقائيًا بمجموع «خصم صلاة + خصم سلوك» المسجّل بالكشف اليومي، ولو كتبت قيمة بخانة «تلقائي» بتعتمد يدويًا)، وعدد الصفحات × ${sh.settings.pageMult}. علّم «✓» عند الطالب الذي تم تسميعه ليدخل بالترتيب.</div>
     <div class="card" style="padding:14px 16px;margin-bottom:14px;">
       <label>أعضاء اللجنة (اثنان أو ثلاثة)</label>
       <div class="row2" style="grid-template-columns:repeat(3,1fr);">
@@ -2992,6 +3005,13 @@ const RP_CSS = `
 .rp table.kv td:first-child{background:#f4f1e6;font-weight:700;width:26%}
 .rp .mini{color:#6c776f;font-size:11px}
 .rp .center{text-align:center}
+.rp table.dense{font-size:9.5px}
+.rp table.dense th,.rp table.dense td{padding:3px 4px}
+.rp table.tiny{font-size:9px;line-height:1.25}
+.rp table.tiny th,.rp table.tiny td{padding:2px 2px;text-align:center}
+.rp table.tiny td:nth-child(2),.rp table.tiny th:nth-child(2){text-align:right;white-space:nowrap}
+.rp tr{page-break-inside:avoid}
+.rp thead{display:table-header-group}
 `;
 (function(){ const s=document.createElement('style'); s.textContent=RP_CSS; document.head.appendChild(s); })();
 
@@ -3000,7 +3020,9 @@ function rpHeader(title, sub){
 }
 function rpTable(headers, rows, sheet, cls){
   const body = rows.map(r=>`<tr>${r.map(v=>`<td>${v===undefined||v===null?'':v}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${headers.length}" class="center">لا يوجد</td></tr>`;
-  return `<table data-sheet="${esc(sheet||'جدول')}"${cls?` class="${cls}"`:''}><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`;
+  const autoCls = headers.length>20 ? 'tiny' : (headers.length>11 ? 'dense' : '');
+  const allCls = [cls, autoCls].filter(Boolean).join(' ');
+  return `<table data-sheet="${esc(sheet||'جدول')}"${allCls?` class="${allCls}"`:''}><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`;
 }
 function rpKV(pairs, sheet){
   return `<table class="kv" data-sheet="${esc(sheet||'معلومات')}"><tbody>${pairs.map(p=>`<tr><td>${esc(p[0])}</td><td>${p[1]}</td></tr>`).join('')}</tbody></table>`;
@@ -3009,6 +3031,11 @@ function genderLabel(g){ return g==='f'?'إناث':'ذكور'; }
 function groupNameById(id){ const g=GROUPS.find(x=>x.id===id); return g? g.name : ''; }
 const sn = s=>esc(s.fullName||s.name||'');
 function statusTxt(st){ return st==='present'?'حاضر':st==='absent'?'غائب':''; }
+function dedViewTxt(r){
+  const a = Number(r.deductPrayer)||0, b = Number(r.deductBehavior)||0;
+  if(!a && !b) return '—';
+  return [a? 'صلاة '+a : '', b? 'سلوك '+b : ''].filter(Boolean).join('، ');
+}
 function surahName(n){ const x=SURAHS[Number(n)-1]; return x? x.name : ''; }
 
 function finalTableForReport(pid, gid){
@@ -3047,8 +3074,8 @@ function buildReportInner(type, p){
     let att='';
     studentProgramIds(s).forEach(pid=>{
       const pg=PROGRAMS.find(x=>x.id===pid); if(!pg) return;
-      const rows = programSessionDates(pg, studentGroupInProgram(s, pid)).map(d=>{ const r=(((s.attendance||{})[pid])||{})[d]||{}; const en=dayEntriesFilled(r); const J=f=>en.map(f).join('<br>'); return [d,dayNameOf(d),statusTxt(r.status),J(e=>esc(surahName(e.surah))),J(e=>e.from||''),J(e=>e.to||''),J(e=>esc(e.grade||'')),J(e=>e.finished?'✓':''),esc(r.signature||''),esc(r.notes||'')]; });
-      att += `<h3>الحضور والتسميع — ${esc(programLabel(pg))}</h3>` + rpTable(['التاريخ','اليوم','الحضور','السورة','من','إلى','التقدير','ختمها','التوقيع','ملاحظات'],rows,'حضور '+programLabel(pg),'compact');
+      const rows = programSessionDates(pg, studentGroupInProgram(s, pid)).map(d=>{ const r=(((s.attendance||{})[pid])||{})[d]||{}; const en=dayEntriesFilled(r); const J=f=>en.map(f).join('<br>'); return [d,dayNameOf(d),statusTxt(r.status),J(e=>esc(surahName(e.surah))),J(e=>e.from||''),J(e=>e.to||''),J(e=>esc(e.grade||'')),J(e=>e.finished?'✓':''),r.deductPrayer||'',r.deductBehavior||'',esc(r.signature||''),esc(r.notes||'')]; });
+      att += `<h3>الحضور والتسميع — ${esc(programLabel(pg))}</h3>` + rpTable(['التاريخ','اليوم','الحضور','السورة','من','إلى','التقدير','ختمها','خصم صلاة','خصم سلوك','التوقيع','ملاحظات'],rows,'حضور '+programLabel(pg),'compact');
     });
     return R('سجل الطالب — '+(s.fullName||s.name), `${info}<h3>سجل الحفظ</h3>${rpTable(['#','السورة','الحالة','التقدير','تاريخ الحفظ','الدورة'],mrows,'الحفظ')}${att}`, 'سجل-'+(s.fullName||s.name));
   }
@@ -3074,8 +3101,8 @@ function buildReportInner(type, p){
     const pr = PROGRAMS.find(x=>x.id===p.pid); const g = GROUPS.find(x=>x.id===p.gid);
     if(!pr||!g) return R('جدول الدوام','<p>لا يوجد</p>');
     const studs = STUDENTS.filter(s=>inGroupForProgram(s,pr.id,g.id)).sort(byName);
-    const rows = studs.map((s,i)=>{ const r=(((s.attendance||{})[pr.id])||{})[p.date]||{}; const en=dayEntriesFilled(r); const J=f=>en.map(f).join('<br>'); return [i+1,sn(s),statusTxt(r.status),J(e=>esc(surahName(e.surah))),J(e=>e.from||''),J(e=>e.to||''),J(e=>esc(e.grade||'')),J(e=>e.finished?'✓ ختمها':''),esc(r.notes||'')]; });
-    return R(`جدول الدوام — ${g.name} — ${p.date} (${dayNameOf(p.date)})`, `${rpKV([['النادي',esc(programLabel(pr))],['المعلم/ة',esc(g.teacherName||'—')]],'معلومات')}${rpTable(['#','الطالب','الحضور','السورة','من آية','إلى آية','التقدير','ختمها','ملاحظات'],rows,'جدول اليوم')}`, `دوام-${g.name}-${p.date}`, 'landscape');
+    const rows = studs.map((s,i)=>{ const r=(((s.attendance||{})[pr.id])||{})[p.date]||{}; const en=dayEntriesFilled(r); const J=f=>en.map(f).join('<br>'); return [i+1,sn(s),statusTxt(r.status),J(e=>esc(surahName(e.surah))),J(e=>e.from||''),J(e=>e.to||''),J(e=>esc(e.grade||'')),J(e=>e.finished?'✓ ختمها':''),r.deductPrayer||'',r.deductBehavior||'',esc(r.notes||'')]; });
+    return R(`جدول الدوام — ${g.name} — ${p.date} (${dayNameOf(p.date)})`, `${rpKV([['النادي',esc(programLabel(pr))],['المعلم/ة',esc(g.teacherName||'—')]],'معلومات')}${rpTable(['#','الطالب','الحضور','السورة','من آية','إلى آية','التقدير','ختمها','خصم صلاة','خصم سلوك','ملاحظات'],rows,'جدول اليوم')}`, `دوام-${g.name}-${p.date}`, 'landscape');
   }
   if(type==='finalSheet'){
     const pr = PROGRAMS.find(x=>x.id===p.pid), g = GROUPS.find(x=>x.id===p.gid); if(!pr||!g) return R('كشف التسميع','<p>لا يوجد</p>');
@@ -3109,15 +3136,18 @@ function buildReportInner(type, p){
   }
   if(type==='programSchedule'){
     const pr = PROGRAMS.find(x=>x.id===p.pid); if(!pr) return R('جدول الدورة','<p>لا يوجد</p>');
-    const parts = programSchedules(pr).map(sc=>{
+    const parts = [];
+    programSchedules(pr).forEach(sc=>{
       const gids = scheduleGroupIds(pr, sc);
       const gnames = gids.map(id=>{ const g = GROUPS.find(x=>x.id===id); return g? esc(g.name)+(g.teacherName? '<br><span class="mini">'+esc(g.teacherName)+'</span>' : '') : ''; });
-      const rows = scheduleSlots(sc).map(sl=>{
+      const build = (date)=> scheduleSlots(sc).map(sl=>{
         const time = `${t12(sl.from)} - ${t12(sl.to)}<br><span class="mini">${durTxt(sl.from,sl.to)}</span>`;
-        if(sl.kind==='break') return [time, esc(sl.title||'استراحة'), ...gids.map(()=>esc(sl.allText||'استراحة'))];
-        return [time, esc(sl.title||''), ...gids.map(gid=>cellTextPlain((sl.cells||{})[gid]))];
+        return [time, esc(sl.title||(sl.kind==='break'?'استراحة':'')), ...gids.map(gid=>slotCellText(sc, sl, gid, date))];
       });
-      return `<h3>${esc(sc.name)} — دوام من ${t12(sc.start)} إلى ${t12(sc.end)}</h3>` + rpTable(['الوقت','الحصة',...gnames], rows, 'جدول '+sc.name);
+      parts.push(`<h3>${esc(sc.name)} — الخطة الافتراضية (دوام من ${t12(sc.start)} إلى ${t12(sc.end)})</h3>` + rpTable(['الوقت','الحصة',...gnames], build(null), 'جدول '+sc.name));
+      schedOverrideDates(sc).forEach(d=>{
+        parts.push(`<h3>${esc(sc.name)} — خطة خاصة بيوم ${d} (${dayNameOf(d)})</h3>` + rpTable(['الوقت','الحصة',...gnames], build(d), (sc.name+' '+d).slice(0,28)));
+      });
     });
     return R('جدول الدورة — '+programLabel(pr), parts.join('') || '<p>لا يوجد جدول لهذه الدورة بعد</p>', 'جدول-'+programLabel(pr), 'landscape');
   }
@@ -3191,6 +3221,7 @@ function exportButtonsHTML(){
     <button class="btn btn-ghost btn-sm" onclick="exportCurrent('pdf')">📄 PDF</button>
     <button class="btn btn-ghost btn-sm" onclick="exportCurrent('word')">📝 Word</button>
     <button class="btn btn-ghost btn-sm" onclick="exportCurrent('excel')">📊 Excel</button>
+    <span class="mini-note">لأدق نتيجة PDF: اضغط 🖨️ طباعة ثم اختر "حفظ كـ PDF"</span>
   </div>`;
 }
 function reportsPageHTML(){
@@ -3261,17 +3292,23 @@ function exportPDF(rep){
   const land = rep.orientation==='landscape';
   const fallback = ()=>{ toast('استخدم الطباعة ثم اختر "حفظ كـ PDF"'); printHTMLDoc(reportDocHTML(rep)); };
   if(!window.html2pdf){ fallback(); return; }
+  /* ملاحظة: html2pdf بينسخ العنصر بكل ستايله — فلازم العنصر نفسه يكون بدون position/left سالب
+     (هاد كان سبب الصفحة البيضاء). نخبّي الغلاف الخارجي بس، والعنصر الداخلي نظيف. */
+  const outer = document.createElement('div');
+  outer.style.cssText = 'position:fixed;left:-30000px;top:0;';
   const holder = document.createElement('div');
-  const w = land ? 1240 : 880;
-  holder.style.cssText = `position:fixed;left:-30000px;top:0;width:${w}px;background:#fff;padding:8px;`;
+  const w = land ? 1120 : 880;
+  holder.style.cssText = `width:${w}px;background:#fff;padding:8px;`;
   holder.innerHTML = rep.html.replace(/%%LOGO%%/g, LOGO_URI);
-  document.body.appendChild(holder);
+  outer.appendChild(holder);
+  document.body.appendChild(outer);
+  const cleanup = ()=>{ try{ outer.remove(); }catch(e){} };
   const opt = {margin:[8,8,8,8], filename:safeFileBase(rep)+'.pdf', image:{type:'jpeg',quality:0.95},
-    html2canvas:{scale:2, useCORS:true, backgroundColor:'#ffffff', windowWidth:w},
+    html2canvas:{scale:2, useCORS:true, backgroundColor:'#ffffff', windowWidth:w, scrollX:0, scrollY:0},
     jsPDF:{unit:'mm', format:'a4', orientation: land?'landscape':'portrait'}, pagebreak:{mode:['css','legacy'], avoid:['tr']}};
   try{
-    html2pdf().set(opt).from(holder).save().then(()=>holder.remove()).catch(()=>{ holder.remove(); fallback(); });
-  }catch(e){ holder.remove(); fallback(); }
+    html2pdf().set(opt).from(holder).save().then(cleanup).catch(()=>{ cleanup(); fallback(); });
+  }catch(e){ cleanup(); fallback(); }
 }
 function exportCurrent(kind){
   const rep = CURRENT_REPORT; if(!rep) return;
@@ -3431,6 +3468,22 @@ function backupCardHTML(){
         <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:10px;"><input type="checkbox" id="esAllowEdit" style="width:auto;" ${sv.allowEdit!==false?'checked':''}> يقدر ولي الأمر يعدّل إجابته</label>
         <input type="hidden" id="esId" value="${sv.id}">
         <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button><button class="btn btn-primary" onclick="submitEditSurvey()">حفظ</button></div>`;
+    }
+    if(kind==='editDayPlanCopy'){
+      const [pid, sid, src] = String(arg).split('|');
+      const p = PROGRAMS.find(x=>x.id===pid); if(!p) return;
+      const dates = programDatesUnion(p).filter(d=>d!==src);
+      body.style.maxWidth = '560px';
+      body.innerHTML = `<button class="close-x" onclick="closeModal()">✕</button><h2>نسخ خطة يوم ${esc(src)} (${dayNameOf(src)})</h2>
+        <p class="mini-note" style="margin-bottom:8px;">اختر الأيام اللي بدك تنسخ لها نفس التعديلات الخاصة بهذا اليوم (بتستبدل أي خطة خاصة موجودة بهذه الأيام).</p>
+        <div class="toolbar" style="margin-bottom:8px;">
+          <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.cdChk').forEach(x=>x.checked=(x.dataset.dow==='${new Date(src+'T00:00:00').getDay()}'))">نفس اليوم من الأسبوع</button>
+          <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.cdChk').forEach(x=>x.checked=true)">كل الأيام</button>
+          <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.cdChk').forEach(x=>x.checked=false)">لا شي</button></div>
+        <div style="max-height:300px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px 12px;">
+          ${dates.map(d=>`<label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:6px;"><input type="checkbox" class="cdChk" value="${d}" data-dow="${new Date(d+'T00:00:00').getDay()}" style="width:auto;"> ${d} — ${dayNameOf(d)}</label>`).join('') || '<span class="mini-note">لا توجد أيام أخرى</span>'}</div>
+        <input type="hidden" id="cdKey" value="${esc(pid+'|'+sid+'|'+src)}">
+        <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">إلغاء</button><button class="btn btn-primary" onclick="submitCopyDayPlan()">نسخ</button></div>`;
     }
     if(kind==='adminPerms'){
       const a = ADMINS.find(x=>x.id===arg); if(!a) return;
@@ -3944,6 +3997,25 @@ function slotWarnings(sc, slots){
   });
   return w;
 }
+/* خطة يوم محدد: بتتخزن كتعديلات فوق الخطة الافتراضية (اختياري). مفتاح اليوم بدون شرطات لتفادي مشاكل مسارات الحقول */
+let schedDay = null;
+function dayKey(date){ return 'd'+String(date).replace(/-/g,''); }
+function keyDate(k){ const s = String(k).slice(1); return s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8); }
+function dayOv(sc, date, slotId){ const dp = date && sc.dayPlans && sc.dayPlans[dayKey(date)]; return dp ? (dp[slotId]||null) : null; }
+function effCell(sc, sl, gid, date){ const base = (sl.cells||{})[gid] || {}; const ov = dayOv(sc,date,sl.id); const o = ov && ov.cells && ov.cells[gid]; return o ? {...base, ...o} : base; }
+function effShared(sc, sl, date){ const base = sl.shared || {}; const ov = dayOv(sc,date,sl.id); return ov && ov.shared ? {...base, ...ov.shared} : base; }
+function effAllText(sc, sl, date){ const ov = dayOv(sc,date,sl.id); return (ov && ov.allText!==undefined) ? ov.allText : sl.allText; }
+function schedOverrideDates(sc){ return Object.keys(sc.dayPlans||{}).filter(k=>Object.keys(sc.dayPlans[k]||{}).length).map(keyDate).sort(); }
+/* نص الخلية الفعّال لحصة معينة (حسب نوعها) بتاريخ معين أو الافتراضي */
+function slotCellText(sc, sl, gid, date){
+  if(sl.kind==='break') return esc(effAllText(sc, sl, date) || 'استراحة');
+  if(sl.kind==='all') return cellTextPlain(effShared(sc, sl, date));
+  return cellTextPlain(effCell(sc, sl, gid, date));
+}
+function slotCellType(sc, sl, gid, date){
+  if(sl.kind==='break') return 'break';
+  return (sl.kind==='all' ? effShared(sc, sl, date) : effCell(sc, sl, gid, date)).type || '';
+}
 function schedPath(sid, ...rest){ return ['schedules', sid, ...rest].join('.'); }
 function schedUpdate(pid, obj, msg){
   return db.collection('programs').doc(pid).update(obj).then(r=>{ if(msg) toast(msg); return r; });
@@ -3959,16 +4031,38 @@ function submitNewSchedule(pid){
 function submitDuplicateSchedule(pid, sid){
   const p = PROGRAMS.find(x=>x.id===pid); const sc = programSchedules(p).find(x=>x.id===sid); if(!sc) return;
   const name = prompt('اسم الجدول الجديد (نسخة من "'+sc.name+'")', sc.name+' (نسخة)'); if(name===null) return;
-  const nid = 'sc'+newId(); const slots = {};
-  scheduleSlots(sc).forEach(sl=>{ const {id, ...rest} = sl; slots['sl'+newId()] = JSON.parse(JSON.stringify(rest)); });
+  const nid = 'sc'+newId(); const slots = {}; const idMap = {};
+  scheduleSlots(sc).forEach(sl=>{ const {id, ...rest} = sl; const nsl = 'sl'+newId(); idMap[id] = nsl; slots[nsl] = JSON.parse(JSON.stringify(rest)); });
+  const dayPlans = {};
+  Object.keys(sc.dayPlans||{}).forEach(k=>{ const o = {}; Object.keys(sc.dayPlans[k]||{}).forEach(oldSlot=>{ if(idMap[oldSlot]) o[idMap[oldSlot]] = JSON.parse(JSON.stringify(sc.dayPlans[k][oldSlot])); }); if(Object.keys(o).length) dayPlans[k] = o; });
   schedSelId = nid;
-  schedUpdate(pid, {[schedPath(nid)]: {name: name.trim()||sc.name, order: Date.now(), start:sc.start||'', end:sc.end||'', groupIds: sc.groupIds||[], slots}}, 'تم نسخ الجدول');
+  schedUpdate(pid, {[schedPath(nid)]: {name: name.trim()||sc.name, order: Date.now(), start:sc.start||'', end:sc.end||'', groupIds: sc.groupIds||[], defaultKind: sc.defaultKind||'normal', slots, dayPlans}}, 'تم نسخ الجدول');
 }
 function deleteSchedule(pid, sid){
   const p = PROGRAMS.find(x=>x.id===pid); const sc = programSchedules(p).find(x=>x.id===sid); if(!sc) return;
   if(!confirm(`حذف الجدول "${sc.name}" بكل حصصه وتعييناته؟`)) return;
   schedSelId = null;
   schedUpdate(pid, {[schedPath(sid)]: firebase.firestore.FieldValue.delete()}, 'تم حذف الجدول');
+}
+function saveSchedKind(pid, sid, slotId, kind){ schedUpdate(pid, {[schedPath(sid,'slots',slotId,'kind')]: kind}); }
+function saveSchedDefaultKind(pid, sid, kind){ schedUpdate(pid, {[schedPath(sid,'defaultKind')]: kind}); }
+function saveSchedShared(pid, sid, slotId, field, value){ schedUpdate(pid, {[schedPath(sid,'slots',slotId,'shared',field)]: value}); }
+function saveDayCell(pid, sid, date, slotId, gid, field, value){ schedUpdate(pid, {[schedPath(sid,'dayPlans',dayKey(date),slotId,'cells',gid,field)]: value}); }
+function saveDayShared(pid, sid, date, slotId, field, value){ schedUpdate(pid, {[schedPath(sid,'dayPlans',dayKey(date),slotId,'shared',field)]: value}); }
+function saveDayAllText(pid, sid, date, slotId, value){ schedUpdate(pid, {[schedPath(sid,'dayPlans',dayKey(date),slotId,'allText')]: value}); }
+function deleteDayPlan(pid, sid, date){
+  if(!confirm(`إرجاع يوم ${date} للخطة الافتراضية؟ (بتنحذف تعديلات هذا اليوم بس)`)) return;
+  schedUpdate(pid, {[schedPath(sid,'dayPlans',dayKey(date))]: firebase.firestore.FieldValue.delete()}, 'رجع اليوم للخطة الافتراضية');
+}
+function submitCopyDayPlan(){
+  const [pid, sid, src] = document.getElementById('cdKey').value.split('|');
+  const p = PROGRAMS.find(x=>x.id===pid); const sc = p && programSchedules(p).find(x=>x.id===sid); if(!sc) return;
+  const plan = sc.dayPlans && sc.dayPlans[dayKey(src)];
+  if(!plan || !Object.keys(plan).length) return toast('ما في تعديلات خاصة بهذا اليوم لنسخها');
+  const targets = Array.from(document.querySelectorAll('.cdChk:checked')).map(x=>x.value).filter(d=>d!==src);
+  if(!targets.length) return toast('اختر يومًا واحدًا على الأقل');
+  const upd = {}; targets.forEach(d=>{ upd[schedPath(sid,'dayPlans',dayKey(d))] = JSON.parse(JSON.stringify(plan)); });
+  schedUpdate(pid, upd, `تم نسخ خطة يوم ${src} إلى ${targets.length} يوم`).then(()=>closeModal());
 }
 function saveSchedMeta(pid, sid, field, value){ schedUpdate(pid, {[schedPath(sid, field)]: value}); }
 function saveSchedSlot(pid, sid, slotId, field, value){ schedUpdate(pid, {[schedPath(sid,'slots',slotId,field)]: value}); }
@@ -3983,7 +4077,7 @@ function submitAddSlot(pid, sid){
   const from = last && tMin(last.to)!=null ? last.to : (sc.start || '10:00');
   const len = last && tMin(last.to)!=null && tMin(last.from)!=null && tMin(last.to)>tMin(last.from) ? tMin(last.to)-tMin(last.from) : 30;
   const to = minToT(Math.min(tMin(from)+len, 23*60+59));
-  schedUpdate(pid, {[schedPath(sid,'slots','sl'+newId())]: {from, to, title:'', kind:'normal', cells:{}, order: Date.now()}});
+  schedUpdate(pid, {[schedPath(sid,'slots','sl'+newId())]: {from, to, title:'', kind: sc.defaultKind==='all'?'all':'normal', cells:{}, order: Date.now()}});
 }
 function submitAutoSplit(pid, sid){
   const p = PROGRAMS.find(x=>x.id===pid); const sc = programSchedules(p).find(x=>x.id===sid); if(!sc) return;
@@ -3994,7 +4088,7 @@ function submitAutoSplit(pid, sid){
   const existing = scheduleSlots(sc);
   if(existing.length && !confirm('التقسيم التلقائي بيستبدل الحصص الحالية بحصص جديدة (وبتنمسح تعييناتها). متابعة؟')) return;
   const slots = {}; let cur = a, i = 0;
-  while(cur<b && i<60){ const to = Math.min(cur+len, b); slots['sl'+newId()] = {from:minToT(cur), to:minToT(to), title:`الحصة ${i+1}`, kind:'normal', cells:{}, order: Date.now()+i}; cur = to; i++; }
+  while(cur<b && i<60){ const to = Math.min(cur+len, b); slots['sl'+newId()] = {from:minToT(cur), to:minToT(to), title:`الحصة ${i+1}`, kind: sc.defaultKind==='all'?'all':'normal', cells:{}, order: Date.now()+i}; cur = to; i++; }
   schedUpdate(pid, {[schedPath(sid,'slots')]: slots}, `تم تقسيم الدوام إلى ${i} حصة`);
 }
 function saveSchedGroups(pid, sid, ids){ schedUpdate(pid, {[schedPath(sid,'groupIds')]: ids}); }
@@ -4014,53 +4108,102 @@ function programScheduleSectionHTML(p){
   const head = `<h2 class="section-title" style="margin-top:0;">🕒 جدول الدورة (تنظيم وقت الحصص والأنشطة)</h2>`;
   const scs = programSchedules(p);
   const newBtn = `<button class="btn btn-primary btn-sm" onclick="submitNewSchedule('${pid}')">+ جدول جديد</button>`;
-  if(!scs.length) return head + `<p class="mini-note" style="margin-bottom:8px;">حدد وقت دوام النادي (مثلًا 10:00 ص – 12:30 م)، قسّمه لحصص، وحدد لكل مجموعة شو عليها بكل حصة: تسميع أو درس أو نشاط.</p><div class="toolbar">${newBtn}</div>`;
+  if(!scs.length) return head + `<p class="mini-note" style="margin-bottom:8px;">حدد وقت دوام النادي (مثلًا 10:00 ص – 12:30 م)، قسّمه لحصص، وحدد شو بكل حصة: لكل مجموعة لحالها، أو لكل المجموعات معًا. وتقدر تخصص خطة مختلفة لأيام معينة.</p><div class="toolbar">${newBtn}</div>`;
   if(!schedSelId || !scs.find(x=>x.id===schedSelId)) schedSelId = scs[0].id;
   const sc = scs.find(x=>x.id===schedSelId);
   const sid = sc.id;
   const slots = scheduleSlots(sc);
   const gids = scheduleGroupIds(p, sc);
   const warns = slotWarnings(sc, slots);
-  const chips = scs.map(x=>`<div class="chip ${x.id===sid?'active':''}" onclick="schedSelId='${x.id}';render();">${esc(x.name)}</div>`).join('');
+  const allDates = programDatesUnion(p);
+  const ovDates = schedOverrideDates(sc);
+  if(schedDay && !allDates.includes(schedDay) && !ovDates.includes(schedDay)) schedDay = null;
+  const day = schedDay;                    /* null = الخطة الافتراضية */
+  const chips = scs.map(x=>`<div class="chip ${x.id===sid?'active':''}" onclick="schedSelId='${x.id}';schedDay=null;render();">${esc(x.name)}</div>`).join('');
   const winMin = (tMin(sc.end)!=null && tMin(sc.start)!=null && tMin(sc.end)>tMin(sc.start)) ? tMin(sc.end)-tMin(sc.start) : null;
   const used = slots.reduce((a,sl)=>{ const d=(tMin(sl.to)??0)-(tMin(sl.from)??0); return a+(d>0?d:0); },0);
   const summary = `دوام ${t12(sc.start)} – ${t12(sc.end)}${winMin? ' ('+durTxt(sc.start,sc.end)+')' : ''} · ${slots.length} حصة${winMin? ' · المحجوز '+used+' من '+winMin+' دقيقة' : ''}`;
   const otherGroups = GROUPS.filter(g=>!gids.includes(g.id));
-  const fk = (...a)=>'sch:'+a.join(':');
-  const colHead = gids.map(gid=>{ const g = GROUPS.find(x=>x.id===gid); return `<th class="sc-cell">${esc(g?g.name:'')}${g&&g.teacherName? `<div class="mini-note">${esc(g.teacherName)}</div>`:''} <button class="btn btn-danger btn-sm" style="padding:0 6px;" title="إخفاء العمود" onclick="saveSchedRemoveGroup('${pid}','${sid}','${gid}')">✕</button></th>`; }).join('');
+  const fk = (...a)=>'sch:'+a.join(':')+(day?':'+dayKey(day):'');
+  const typeOpts = (sel)=>SLOT_TYPES.map(([v,l])=>`<option value="${v}" ${(sel||'')===v?'selected':''}>${l}</option>`).join('');
+  const colHead = gids.map(gid=>{ const g = GROUPS.find(x=>x.id===gid); return `<th class="sc-cell">${esc(g?g.name:'')}${g&&g.teacherName? `<div class="mini-note">${esc(g.teacherName)}</div>`:''} ${day?'':`<button class="btn btn-danger btn-sm" style="padding:0 6px;" title="إخفاء العمود" onclick="saveSchedRemoveGroup('${pid}','${sid}','${gid}')">✕</button>`}</th>`; }).join('');
+  const ncols = Math.max(gids.length,1);
+  const dayBtnStyle = 'outline:2px dashed var(--gold-500);outline-offset:-2px;';
+
   const rows = slots.map(sl=>{
-    const isBreak = sl.kind==='break';
-    const warn = (warns[sl.id]||[]).map(m=>`<div class="mini-note" style="color:var(--red-600);">⚠ ${m}</div>`).join('');
-    const timeCell = `<td style="white-space:nowrap;min-width:190px;">
+    const kind = sl.kind==='break' ? 'break' : (sl.kind==='all' ? 'all' : 'normal');
+    const warn = day ? '' : (warns[sl.id]||[]).map(m=>`<div class="mini-note" style="color:var(--red-600);">⚠ ${m}</div>`).join('');
+    const kindSel = `<select class="mini-input" style="width:auto;margin-top:4px;" onchange="saveSchedKind('${pid}','${sid}','${sl.id}',this.value)">
+        <option value="normal" ${kind==='normal'?'selected':''}>كل مجموعة لحالها</option>
+        <option value="all" ${kind==='all'?'selected':''}>لكل المجموعات معًا</option>
+        <option value="break" ${kind==='break'?'selected':''}>استراحة / وقت عام</option></select>`;
+    const timeCell = day
+      ? `<td style="white-space:nowrap;min-width:150px;"><b>${t12(sl.from)} – ${t12(sl.to)}</b><div class="mini-note">${durTxt(sl.from,sl.to) || '—'}</div></td><td style="min-width:90px;">${esc(sl.title||'')}</td>`
+      : `<td style="white-space:nowrap;min-width:190px;">
         <input data-fk="${fk(sl.id,'from')}" type="time" class="mini-input" style="width:auto;" value="${esc(sl.from||'')}" onchange="saveSchedSlot('${pid}','${sid}','${sl.id}','from',this.value)">
         ←
         <input data-fk="${fk(sl.id,'to')}" type="time" class="mini-input" style="width:auto;" value="${esc(sl.to||'')}" onchange="saveSchedSlot('${pid}','${sid}','${sl.id}','to',this.value)">
         <div class="mini-note">${durTxt(sl.from,sl.to) || '—'}</div>${warn}
-        <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin:4px 0 0;font-size:12px;"><input type="checkbox" style="width:auto;" ${isBreak?'checked':''} onchange="saveSchedSlot('${pid}','${sid}','${sl.id}','kind',this.checked?'break':'normal')"> استراحة / وقت عام لكل المجموعات</label>
-        <button class="btn btn-danger btn-sm" style="margin-top:4px;" onclick="deleteSchedSlot('${pid}','${sid}','${sl.id}')">حذف الحصة</button>
+        ${kindSel}
+        <div><button class="btn btn-danger btn-sm" style="margin-top:4px;" onclick="deleteSchedSlot('${pid}','${sid}','${sl.id}')">حذف الحصة</button></div>
       </td>
       <td style="min-width:120px;"><input data-fk="${fk(sl.id,'title')}" class="mini-input" style="width:100%;" placeholder="اسم الحصة" value="${esc(sl.title||'')}" onchange="saveSchedSlot('${pid}','${sid}','${sl.id}','title',this.value)"></td>`;
-    if(isBreak){
-      return `<tr>${timeCell}<td class="sc-break" colspan="${Math.max(gids.length,1)}"><input data-fk="${fk(sl.id,'all')}" class="mini-input" style="width:100%;" placeholder="مثال: استراحة / طابور / وجبة" value="${esc(sl.allText||'')}" onchange="saveSchedSlot('${pid}','${sid}','${sl.id}','allText',this.value)"></td></tr>`;
+    if(kind==='break'){
+      const v = effAllText(sc, sl, day) || '';
+      const ovr = day && dayOv(sc,day,sl.id) && dayOv(sc,day,sl.id).allText!==undefined;
+      const onch = day ? `saveDayAllText('${pid}','${sid}','${day}','${sl.id}',this.value)` : `saveSchedSlot('${pid}','${sid}','${sl.id}','allText',this.value)`;
+      return `<tr>${timeCell}<td class="sc-break" colspan="${ncols}"><input data-fk="${fk(sl.id,'all')}" class="mini-input" style="width:100%;${ovr?dayBtnStyle:''}" placeholder="مثال: استراحة / طابور / وجبة" value="${esc(v)}" onchange="${onch}"></td></tr>`;
+    }
+    if(kind==='all'){
+      const cl = effShared(sc, sl, day);
+      const ov = day && dayOv(sc,day,sl.id) && dayOv(sc,day,sl.id).shared;
+      const call = (f)=> day ? `saveDayShared('${pid}','${sid}','${day}','${sl.id}','${f}',this.value)` : `saveSchedShared('${pid}','${sid}','${sl.id}','${f}',this.value)`;
+      return `<tr>${timeCell}<td class="sc-cell ${cl.type?'sc-'+cl.type:''}" colspan="${ncols}" style="${ov?dayBtnStyle:''}">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <select data-fk="${fk(sl.id,'sh','type')}" class="mini-input" style="width:auto;" onchange="${call('type')}">${typeOpts(cl.type)}</select>
+          <input data-fk="${fk(sl.id,'sh','text')}" class="mini-input" style="flex:1;min-width:160px;" placeholder="الدرس / النشاط (لكل المجموعات)" value="${esc(cl.text||'')}" onchange="${call('text')}">
+          <input data-fk="${fk(sl.id,'sh','teacher')}" class="mini-input" style="flex:1;min-width:120px;" placeholder="المعلم / المكان" value="${esc(cl.teacher||'')}" onchange="${call('teacher')}">
+        </div></td></tr>`;
     }
     const cells = gids.map(gid=>{
-      const cl = (sl.cells||{})[gid] || {};
-      const opts = SLOT_TYPES.map(([v,l])=>`<option value="${v}" ${(cl.type||'')===v?'selected':''}>${l}</option>`).join('');
-      return `<td class="sc-cell ${cl.type? 'sc-'+cl.type : ''}">
-        <select data-fk="${fk(sl.id,gid,'type')}" class="mini-input" style="width:100%;" onchange="saveSchedCell('${pid}','${sid}','${sl.id}','${gid}','type',this.value)">${opts}</select>
-        <input data-fk="${fk(sl.id,gid,'text')}" class="mini-input" style="width:100%;margin-top:4px;" placeholder="الدرس / النشاط" value="${esc(cl.text||'')}" onchange="saveSchedCell('${pid}','${sid}','${sl.id}','${gid}','text',this.value)">
-        <input data-fk="${fk(sl.id,gid,'teacher')}" class="mini-input" style="width:100%;margin-top:4px;" placeholder="المعلم / المكان" value="${esc(cl.teacher||'')}" onchange="saveSchedCell('${pid}','${sid}','${sl.id}','${gid}','teacher',this.value)">
+      const cl = effCell(sc, sl, gid, day);
+      const ov = day && dayOv(sc,day,sl.id) && dayOv(sc,day,sl.id).cells && dayOv(sc,day,sl.id).cells[gid];
+      const call = (f)=> day ? `saveDayCell('${pid}','${sid}','${day}','${sl.id}','${gid}','${f}',this.value)` : `saveSchedCell('${pid}','${sid}','${sl.id}','${gid}','${f}',this.value)`;
+      return `<td class="sc-cell ${cl.type? 'sc-'+cl.type : ''}" style="${ov?dayBtnStyle:''}">
+        <select data-fk="${fk(sl.id,gid,'type')}" class="mini-input" style="width:100%;" onchange="${call('type')}">${typeOpts(cl.type)}</select>
+        <input data-fk="${fk(sl.id,gid,'text')}" class="mini-input" style="width:100%;margin-top:4px;" placeholder="الدرس / النشاط" value="${esc(cl.text||'')}" onchange="${call('text')}">
+        <input data-fk="${fk(sl.id,gid,'teacher')}" class="mini-input" style="width:100%;margin-top:4px;" placeholder="المعلم / المكان" value="${esc(cl.teacher||'')}" onchange="${call('teacher')}">
       </td>`;
     }).join('');
     return `<tr>${timeCell}${cells}</tr>`;
-  }).join('') || `<tr><td colspan="${2+Math.max(gids.length,1)}" style="text-align:center;color:var(--ink-400);padding:18px;">لا توجد حصص — اضغط "⚡ تقسيم تلقائي" أو "+ حصة".</td></tr>`;
+  }).join('') || `<tr><td colspan="${2+ncols}" style="text-align:center;color:var(--ink-400);padding:18px;">لا توجد حصص — اضغط "⚡ تقسيم تلقائي" أو "+ حصة".</td></tr>`;
+
+  const dayOptions = allDates.map(d=>`<option value="${d}" ${day===d?'selected':''}>${d} — ${dayNameOf(d)}${ovDates.includes(d)?' ● خطة خاصة':''}</option>`).join('');
+  const ovChips = ovDates.map(d=>`<span class="tag" style="cursor:pointer;margin:2px;" onclick="schedDay='${d}';render();">${d}</span>`).join('');
+  const dayBar = `
+    <div class="card" style="padding:10px 14px;margin-bottom:10px;${day?'border-top:3px solid var(--gold-500);':''}">
+      <div class="toolbar" style="margin-bottom:6px;">
+        <b>الخطة المعروضة:</b>
+        <select style="width:auto;min-width:260px;" onchange="schedDay=this.value||null;render();">
+          <option value="">الخطة الافتراضية (تنطبق على كل الأيام)</option>${dayOptions}</select>
+        ${day? `<button class="btn btn-ghost btn-sm" onclick="openModal('editDayPlanCopy','${pid}|${sid}|${day}')">📋 نسخ خطة هذا اليوم لأيام أخرى</button><button class="btn btn-danger btn-sm" onclick="deleteDayPlan('${pid}','${sid}','${day}')">↩ إرجاع هذا اليوم للافتراضية</button>` : ''}
+      </div>
+      ${day
+        ? `<div class="mini-note" style="color:#7a5c0f;">أنت الآن بتحرر خطة يوم <b>${day} (${dayNameOf(day)})</b> — أي تعديل هون بيخص هذا اليوم فقط، والخلايا المعدّلة محاطة بإطار ذهبي متقطع. الباقي بيرث من الخطة الافتراضية. أوقات الحصص بتتعدّل من الخطة الافتراضية.</div>`
+        : `<div class="mini-note">هاي الخطة الافتراضية: بتنطبق على كل أيام الدوام. إذا بدك يوم معين بخطة أنشطة مختلفة، اختره من القائمة وعدّل عليه (اختياري).${ovChips? '<br>أيام لها خطة خاصة: '+ovChips : ''}</div>`}
+    </div>`;
+
   return head + `
     <div class="chips">${chips}${`<div class="chip" onclick="submitNewSchedule('${pid}')" data-write="1">+ جدول جديد</div>`}</div>
     <div class="card" style="padding:12px 14px;margin-bottom:10px;">
       <div class="toolbar" style="margin-bottom:8px;">
-        <input data-fk="${fk('name')}" style="max-width:220px;" value="${esc(sc.name||'')}" placeholder="اسم الجدول" onchange="saveSchedMeta('${pid}','${sid}','name',this.value)">
-        <span class="mini-note">يبدأ</span><input data-fk="${fk('start')}" type="time" class="mini-input" style="width:auto;" value="${esc(sc.start||'')}" onchange="saveSchedMeta('${pid}','${sid}','start',this.value)">
-        <span class="mini-note">ينتهي</span><input data-fk="${fk('end')}" type="time" class="mini-input" style="width:auto;" value="${esc(sc.end||'')}" onchange="saveSchedMeta('${pid}','${sid}','end',this.value)">
+        <input data-fk="sch:name" style="max-width:220px;" value="${esc(sc.name||'')}" placeholder="اسم الجدول" onchange="saveSchedMeta('${pid}','${sid}','name',this.value)">
+        <span class="mini-note">يبدأ</span><input data-fk="sch:start" type="time" class="mini-input" style="width:auto;" value="${esc(sc.start||'')}" onchange="saveSchedMeta('${pid}','${sid}','start',this.value)">
+        <span class="mini-note">ينتهي</span><input data-fk="sch:end" type="time" class="mini-input" style="width:auto;" value="${esc(sc.end||'')}" onchange="saveSchedMeta('${pid}','${sid}','end',this.value)">
+        <span class="mini-note">نمط الحصص الجديدة</span>
+        <select class="mini-input" style="width:auto;" title="بيتحدد على الحصص اللي بتنضاف أو بتنقسم تلقائيًا (وكل حصة بتقدر تغيّر نمطها لحالها)" onchange="saveSchedDefaultKind('${pid}','${sid}',this.value)">
+          <option value="normal" ${sc.defaultKind!=='all'?'selected':''}>كل مجموعة لحالها</option>
+          <option value="all" ${sc.defaultKind==='all'?'selected':''}>لكل المجموعات معًا</option></select>
       </div>
       <div class="toolbar" style="margin-bottom:6px;">
         <span data-write="1" style="display:inline-flex;gap:6px;align-items:center;"><span class="mini-note">مدة الحصة (دقيقة)</span><input id="splitMin" type="number" min="5" max="240" value="30" class="mini-input" style="width:70px;">
@@ -4073,6 +4216,7 @@ function programScheduleSectionHTML(p){
       </div>
       <div class="mini-note">${summary}</div>
     </div>
+    ${dayBar}
     <div class="card" data-keepscroll="sched" style="padding:10px 12px;overflow-x:auto;margin-bottom:18px;">
       <table class="compact"><thead><tr><th>الوقت</th><th>الحصة</th>${colHead || '<th>(لا توجد مجموعات منتسبة للدورة بعد — أضف مجموعة من القائمة)</th>'}</tr></thead><tbody>${rows}</tbody></table>
     </div>`;
@@ -4082,14 +4226,16 @@ function groupScheduleCardHTML(gid, p){
   const scs = programSchedules(p).filter(sc=>scheduleSlots(sc).length);
   if(!scs.length) return '';
   const g = GROUPS.find(x=>x.id===gid);
+  const date = (typeof dailyDate!=='undefined' && dailyDate) ? dailyDate : null;
   return scs.map(sc=>{
+    const has = date && schedOverrideDates(sc).includes(date);
     const rows = scheduleSlots(sc).map(sl=>{
-      let what;
-      if(sl.kind==='break') what = `<span class="mini-note">${esc(sl.allText||'استراحة')}</span>`;
-      else { const cl = (sl.cells||{})[gid] || {}; const t = cellTextPlain(cl); what = t? `<span class="${cl.type?'sc-'+cl.type:''}" style="padding:2px 8px;border-radius:6px;">${t}</span>` : '<span class="mini-note">—</span>'; }
+      const t = slotCellText(sc, sl, gid, has? date : null);
+      const ty = slotCellType(sc, sl, gid, has? date : null);
+      const what = t? `<span class="${ty?'sc-'+ty:''}" style="padding:2px 8px;border-radius:6px;">${t}</span>` : '<span class="mini-note">—</span>';
       return `<tr><td style="white-space:nowrap;">${t12(sl.from)} – ${t12(sl.to)}</td><td>${esc(sl.title||'')}</td><td>${what}</td></tr>`;
     }).join('');
-    return `<div class="card" style="padding:10px 14px;margin-bottom:10px;"><div style="font-weight:700;font-size:13.5px;margin-bottom:6px;">🕒 ${esc(sc.name)} — جدول ${esc(g?g.name:'')} (${esc(programLabel(p))})</div>
+    return `<div class="card" style="padding:10px 14px;margin-bottom:10px;"><div style="font-weight:700;font-size:13.5px;margin-bottom:6px;">🕒 ${esc(sc.name)} — جدول ${esc(g?g.name:'')} (${esc(programLabel(p))}) ${has? `<span class="tag" style="background:#fdf1d8;color:#8a6a12;">خطة خاصة بيوم ${date}</span>` : '<span class="mini-note">الخطة الافتراضية</span>'}</div>
       <table class="compact"><thead><tr><th>الوقت</th><th>الحصة</th><th>شو على المجموعة</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }).join('');
 }
